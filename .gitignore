@@ -34,6 +34,10 @@ config.local.json
 assets/pets/*/
 !assets/pets/example/
 
+# 验证程序的临时产物
+verify/.tmp-*.png
+verify/*.log
+
 # 编辑器 / 系统
 .vscode/*
 !.vscode/extensions.json

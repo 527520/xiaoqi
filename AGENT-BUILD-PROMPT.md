@@ -86,7 +86,15 @@
 | 显示器 | 单显示器 2560×1440。**多屏与混合 DPI 无法在本机验证**——相关功能必须写成可测但标注"未验证" |
 | GPU | NVIDIA RTX 5060 Ti + Intel 核显 |
 
-**因为没有 C++ 编译器，任何需要编译的原生模块都不可用。** 所有原生依赖必须选**自带预编译二进制**的包（见 §4.2）。这也意味着：**不要写 C++ N-API 模块，不要装 Visual Studio Build Tools。**
+**因为没有 C++ 编译器，任何需要编译的原生模块都不可用。** 所有原生依赖必须选**自带预编译二进制**的包（见 §4.2）。这也意味着：**不要写 C++ N-API 模块，不要装 Visual Studio Build Tools。** `pnpm` 若报 `ERR_PNPM_IGNORED_BUILDS`，那是它的防呆提示——所有原生依赖都自带预编译，**构建脚本本就不该跑**，用 `pnpm.onlyBuiltDependencies: []` 显式禁掉即可，不要为此安装编译器。
+
+**M0 前置验证已完成**：`verify/` 下有一套可复现的验证程序，在本机跑出 **27 项通过 / 0 项失败 / 5 项因硬件条件待确认**。结论与复现方式见 `docs/verification.md`。**在动手实现前先跑一遍确认环境未变**：
+
+```
+cd verify && pnpm install && pnpm verify
+```
+
+（捕获取证加 `XIAOQI_CHECK_CAPTURE=1`。）这套验证程序覆盖了 `better-sqlite3`、`koffi`、透明窗、遮挡开关、捕获排除、`setShape`、QUNS 全屏检测与场景映射表自检，**不要重新发明验证方法，也不要因为它报错就去装编译器**。
 
 **网络注意**：本机 DNS 走 fake-IP（198.18.0.0/15），**`web_fetch` 工具对所有域名都失败**。需要查资料时改用 `pwsh` + `Invoke-RestMethod`/`Invoke-WebRequest`（`web_search` 可用）。shell 是 PowerShell，**不支持 heredoc**——写多行文本用文件。
 
@@ -160,11 +168,12 @@ Electron **没有逐像素穿透**（issue #1335 开放 11 年）。而 `forward
 
 **必做**：一个**解除卡死穿透的恢复路径**（托盘菜单项 + 全局快捷键），因为 #49982 是真实存在的状态。
 
-**可选补充**：`win.setShape(rects)` 走 OS 层 `SetWindowRgn`，但注意——
+**可选补充**：`win.setShape(rects)` 走 OS 层 `SetWindowRgn`。
+- ⚠️ **参数必须用小写 `{x, y, width, height}`**（实测）。Electron 的类型定义写的是 `Rectangle`（`X/Y/Width/Height`），但**运行时传大写会抛 `Error processing argument at index 0, conversion failure from`**；`null` 同样失败；`[]` 成功（复原为矩形）。
 - **矩形是并集（union），无法挖洞**，只能定义外轮廓 → **宠物必须是单一连通轮廓**。
-- `setShape` + `transparent: true` 的组合**尚未验证**，第一次用之前先做隔离测试。
+- v0.1 **只作为可选补充，不作为依赖**：本机验证中 `GetWindowRgnBox` 未能确认 OS 层区域真的建立（调用返回 ERROR，疑为句柄传递姿势问题，不代表 `setShape` 无效）。是否采用留到 M1 用真实轮廓视觉确认。
 
-**④ 全屏检测用 koffi 调 Win32（已实测可用）**
+**④ 全屏检测用 koffi 调 Win32（已实测通过）**
 
 Electron **无法得知其他应用是否全屏**（`win.isFullScreen()` 只管自己的窗口）。`workArea == bounds` 这个流行启发式**没有文档支持**，不要用。
 
@@ -174,12 +183,32 @@ Electron **无法得知其他应用是否全屏**（`win.isFullScreen()` 只管�
 const koffi = require('koffi')
 const shell32 = koffi.load('shell32.dll')
 const SHQueryUserNotificationState = shell32.func('int __stdcall SHQueryUserNotificationState(_Out_ int *peState)')
-// 实测：正常桌面返回 5；全屏应用取得前景时返回 2，且全屏期间持续为 2
+// 实测：正常桌面 state=5
 ```
 
 **`QUERY_USER_NOTIFICATION_STATE` 语义**：1 = NOT_PRESENT（锁屏/屏保）、**2 = BUSY（全屏应用或演示设置）**、3 = RUNNING_D3D_FULL_SCREEN（独占全屏）、4 = PRESENTATION_MODE、5 = ACCEPTS_NOTIFICATIONS、6 = QUIET_TIME、7 = APP。
 
 → **把 `{1, 2, 3, 4}` 一律视为"静默"**（既包括全屏，也包括锁屏）。
+
+**⚠️ 实测纠错——不要试图用几何判断全屏：**
+
+```
+无边框窗口 + 几何覆盖整个显示器   →  QUNS 仍是 5   ← Windows 不认
+同一窗口 setFullScreen(true)     →  QUNS = 2      ← 只认真正的全屏
+有边框窗口最大化                 →  QUNS 仍是 5   ← 最大化不算全屏（这是正确行为）
+```
+
+**Windows 只把真正进入全屏的窗口算作全屏应用。** 这对产品有利（用户最大化窗口工作时宠物不会被误判静默），但也意味着**任何"窗口矩形 == 显示器矩形"的替代方案都是错的**。
+
+**⚠️ 另一个实测陷阱**：`GetWindowRect` 比真实可视边界**大 16px**（Win10/11 的不可见调整边框）：
+
+```
+显示器物理分辨率              : 2560x1440
+前台窗口 GetWindowRect       : 2576x1456   ← 大 16px
+DWM 扩展外框（真实边界）      : 2560x1440
+```
+
+拿 `GetWindowRect` 做像素比对会**永远判否**。需要真实边界时用 `DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS /* 9 */, ...)`。
 
 **⑤ `GetLastInputInfo` 必须是 `_Inout_`，不能是 `_Out_`（实测陷阱）**
 
@@ -209,7 +238,9 @@ Chromium 把**文字缩放**折进了这个值（源码原话：1.5 文字 × 2.
 - 它调用 `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)`，Win10 2004+ 窗口**完全从捕获中移除**。
 - **必须在窗口 Show 之后设置**（Chromium 在窗口不可见时设置 affinity 会得到空白窗），
   且**每次隐藏/显示之后都要重新断言**。
-- ⚠️ 有开放的已确认回归 **#47834**（Electron 36.3.2 在 Win10 19045 上仍会被截到，Chrome 不复现）。**Win11 是否受影响未确认** → M1 必须实测，不能假定"一键隐身"100% 可靠，并在 README 里如实说明它的边界（对手机拍屏无效）。
+- ✅ **本机已实测可靠**：用纯洋红探针窗做桌面捕获取证——关闭保护时洋红块可见，开启保护后**从捕获中消失**。
+  此前担心的开放回归 **electron#47834 不影响 Electron 44.3.0 / Win11 build 26200**。
+- **边界必须如实写进 README**：这不是安全特性，**手机拍屏依然能拍到**（微软官方明确说明）。不要宣传成"防截屏"。
 
 **⑨ 托盘与形态切换**
 
@@ -298,14 +329,11 @@ assets/pets/xiaoqi/
 
 ### M0 环境与骨架
 
-1. `pnpm init`，装 electron-vite + TS strict + React + PixiJS
-2. **五个前置验证（不通过就停下来报告，不要继续）**：
-   - **V1** `better-sqlite3` 真的能在 Electron 主进程里打开数据库（不要信"理论上可行"）
-   - **V2** `koffi` 能拿到 `SHQueryUserNotificationState` 与 `GetLastInputInfo`（后者必须用 `_Inout_`）
-   - **V3** 透明 + 无边框 + 置顶窗正常显示，`transparent` 不出现黑底
-   - **V4** 遮挡开关生效：全屏视频/游戏下宠物**不消失**
-   - **V5** `setShape` 在 `transparent: true` 窗口上的行为（**只做记录**，不作依赖）
-3. 把结果写成 `docs/verification.md`，逐条标注 ✅/❌
+1. **先跑一遍既有验证**：`cd verify && pnpm install && pnpm verify`，确认输出与 `docs/verification.md` 记录的结论一致（27 通过 / 0 失败 / 5 待确认）。这一步是为了确认环境未变——**不是让你重新设计验证**。
+   - ✅ 已验证通过、**不需要再试探**：`better-sqlite3` 13.0.3 免 rebuild 可用（含 FTS5 中文子串检索）、`koffi` 3.2.1 可调 Win32、透明置顶窗正常、遮挡开关生效、**捕获排除可靠**、**QUNS 全屏检测成立**。
+   - ⚠️ 已知待确认（本机硬件所限，实现时**如实标注未验证**，不要假装通过）：多屏与混合 DPI、`setShape` 的 OS 层区域是否真建立、全屏下宠物是否变黑的人眼确认、捕获排除对第三方录制工具的覆盖度。
+2. `pnpm init`，装 electron-vite + TS strict + React + PixiJS
+3. 把结果与偏差写进 `docs/verification.md`（**只追加增量**，不要覆盖既有结论）
 4. 调研 GitHub 开源桌宠作为**设计参考**（不是抄代码）：
    - ✅ **可借鉴代码（MIT）**：`OpenPetsHQ/openpets`（**Electron + TS，架构参考首选**）、`ayangweb/BongoCat`（功能清单参考）
    - ⛔ **只能读设计、绝不复制代码**：`rullerzhou-afk/clawd-on-desk`（**AGPL-3.0**）、`ChaozhongLiu/DyberPet`（**GPL-3.0**）

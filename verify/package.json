@@ -1,0 +1,18 @@
+{
+  "name": "xiaoqi-m0-verify",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "M0 前置验证：证明技术方案在本机成立后才开始写业务代码",
+  "main": "main.mjs",
+  "scripts": {
+    "verify": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^44.3.0"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "koffi": "3.2.1"
+  }
+}

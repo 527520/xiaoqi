@@ -1,0 +1,6 @@
+# pnpm 10+ 默认阻止依赖的构建脚本。本项目所有原生依赖都自带预编译二进制
+# （better-sqlite3 13 起走 N-API，koffi 走 @koromix 平台包），构建脚本本就不该跑。
+# 这台机器上也没有任何 C++ 编译器，所以显式禁掉，避免 pnpm 反复提示 approve-builds。
+allowBuilds:
+  better-sqlite3: false
+  koffi: false

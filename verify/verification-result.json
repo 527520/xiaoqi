@@ -1,0 +1,289 @@
+{
+  "ranAt": "2026-09-11T14:13:15.285Z",
+  "versions": {
+    "node": "24.20.0",
+    "acorn": "8.18.0",
+    "ada": "4.0.0",
+    "amaro": "1.1.11",
+    "ares": "1.34.8",
+    "brotli": "1.2.0",
+    "cldr": "48.0",
+    "icu": "78.2",
+    "llhttp": "9.4.3",
+    "merve": "1.2.2",
+    "modules": "149",
+    "napi": "10",
+    "nbytes": "0.1.4",
+    "ncrypto": "0.0.1",
+    "nghttp2": "1.70.0",
+    "nghttp3": "",
+    "ngtcp2": "",
+    "openssl": "0.0.0",
+    "simdjson": "4.6.6",
+    "simdutf": "7.7.0",
+    "sqlite": "3.53.4",
+    "tz": "2025c",
+    "undici": "7.29.0",
+    "unicode": "17.0",
+    "uv": "1.52.1",
+    "uvwasi": "0.0.23",
+    "v8": "15.2.124.19-electron.0",
+    "zlib": "1.3.2.1-motley",
+    "zstd": "1.6.0",
+    "electron": "44.3.0",
+    "chrome": "152.0.7977.78"
+  },
+  "platform": "10.0.26200",
+  "results": [
+    {
+      "name": "Electron",
+      "status": "INFO",
+      "value": "44.3.0"
+    },
+    {
+      "name": "Chromium",
+      "status": "INFO",
+      "value": "152.0.7977.78"
+    },
+    {
+      "name": "Node（Electron 内置）",
+      "status": "INFO",
+      "value": "24.20.0"
+    },
+    {
+      "name": "Node-API",
+      "status": "INFO",
+      "value": "10"
+    },
+    {
+      "name": "平台",
+      "status": "INFO",
+      "value": "win32 10.0.26200  x64"
+    },
+    {
+      "name": "显示器",
+      "status": "INFO",
+      "value": "2560x1440@1x外"
+    },
+    {
+      "name": "多屏与混合 DPI",
+      "status": "WARN",
+      "value": "本机只有一块显示器 → 跨屏定位与混合 DPI 无法验证，实现后必须标注未验证"
+    },
+    {
+      "name": "模块加载",
+      "status": "PASS",
+      "value": "better-sqlite3 13.0.3"
+    },
+    {
+      "name": "读写",
+      "status": "PASS",
+      "value": "SELECT → 小奇"
+    },
+    {
+      "name": "FTS5 全文检索",
+      "status": "PASS",
+      "value": "1 条命中：用户昨天也在加班"
+    },
+    {
+      "name": "中文分词",
+      "status": "INFO",
+      "value": "FTS5 默认 unicode61 对中文按字切分；\"加班\"能命中说明子串检索可用"
+    },
+    {
+      "name": "结论",
+      "status": "PASS",
+      "value": "N-API 预编译二进制直接可用，无需 electron-rebuild"
+    },
+    {
+      "name": "koffi 版本",
+      "status": "PASS",
+      "value": "3.2.1"
+    },
+    {
+      "name": "gdi32 可加载",
+      "status": "PASS",
+      "value": "注意 CreateRectRgn 在 gdi32 而非 user32"
+    },
+    {
+      "name": "SHQueryUserNotificationState",
+      "status": "PASS",
+      "value": "hr=0  state=5  QUNS_ACCEPTS_NOTIFICATIONS（正常）  → 可活动"
+    },
+    {
+      "name": "GetLastInputInfo",
+      "status": "PASS",
+      "value": "ok=true cbSize=8 空闲=322.2s"
+    },
+    {
+      "name": "负向对照（cbSize=4）",
+      "status": "PASS",
+      "value": "返回 false，证明结构体真被校验 → 调用有效"
+    },
+    {
+      "name": "前台进程名",
+      "status": "PASS",
+      "value": "pid=12536 进程=msedge"
+    },
+    {
+      "name": "场景分类",
+      "status": "PASS",
+      "value": "msedge → 浏览"
+    },
+    {
+      "name": "显示器物理分辨率",
+      "status": "INFO",
+      "value": "2560x1440"
+    },
+    {
+      "name": "前台窗口 GetWindowRect",
+      "status": "INFO",
+      "value": "2576x1456"
+    },
+    {
+      "name": "DWM 扩展外框（真实可视边界）",
+      "status": "PASS",
+      "value": "2560x1440"
+    },
+    {
+      "name": "陷阱：GetWindowRect 比真实边界大",
+      "status": "PASS",
+      "value": "大 16px（不可见调整边框）→ 拿它做全屏像素比对会永远判否，必须改用 DWMWA_EXTENDED_FRAME_BOUNDS 或 QUNS"
+    },
+    {
+      "name": "像素比对能否判定全屏",
+      "status": "INFO",
+      "value": "窗口真实边界 == 显示器 → 该窗口很可能全屏"
+    },
+    {
+      "name": "窗口创建",
+      "status": "PASS",
+      "value": "320x320  frame=false transparent=true resizable=false"
+    },
+    {
+      "name": "置顶",
+      "status": "PASS",
+      "value": "true"
+    },
+    {
+      "name": "渲染产出校验",
+      "status": "PASS",
+      "value": "左上角 RGB=(255,0,255) 洋红 ✓ 渲染正常"
+    },
+    {
+      "name": "自捕获的透明度",
+      "status": "INFO",
+      "value": "Chromium 自捕获合成的是不透明位图，因此自捕获无法证明桌面上的透明 —— 见 V4 桌面取证"
+    },
+    {
+      "name": "渲染进程 devicePixelRatio",
+      "status": "INFO",
+      "value": "1"
+    },
+    {
+      "name": "screen.scaleFactor",
+      "status": "INFO",
+      "value": "1（本机恰好相同；陷阱 ⑥ 在有文字缩放时才会显现）"
+    },
+    {
+      "name": "主进程 disable-features",
+      "status": "PASS",
+      "value": "CalculateNativeWinOcclusion"
+    },
+    {
+      "name": "位置要求",
+      "status": "INFO",
+      "value": "必须在 main.js 顶层；放进 app.whenReady() 里太晚"
+    },
+    {
+      "name": "桌面上能看到探针窗口（纯洋红）",
+      "status": "PASS",
+      "value": "是 → 说明窗口真的画在桌面上且未被遮挡节流；同时证明透明窗在不透明区域会正常显示"
+    },
+    {
+      "name": "「全屏应用下不变空白」",
+      "status": "WARN",
+      "value": "需真实全屏应用在场才能验证，脚本无法自动制造 —— 用 XIAOQI_KEEP_OPEN_MS 保留窗口后手工开全屏视频观察"
+    },
+    {
+      "name": "setContentProtection(true)",
+      "status": "INFO",
+      "value": "已调用（内部 = SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)）"
+    },
+    {
+      "name": "已知开放回归",
+      "status": "WARN",
+      "value": "electron#47834（36.3.2 / Win10 19045 仍被截到）；Win11 是否受影响未确认 —— 下方取证就是回答这个问题"
+    },
+    {
+      "name": "捕获取证",
+      "status": "WARN",
+      "value": "未启用。用 XIAOQI_CHECK_CAPTURE=1 重跑以获得确定结论"
+    },
+    {
+      "name": "setShape([...]) 小写字段",
+      "status": "PASS",
+      "value": "未抛异常（大写 PascalCase 会失败——实测）"
+    },
+    {
+      "name": "GetWindowRgnBox",
+      "status": "WARN",
+      "value": "未检测到区域 (type=0；0=ERROR 1=NULLREGION)"
+    },
+    {
+      "name": "setShape([]) 复原",
+      "status": "PASS",
+      "value": "type=0（已复原为矩形）"
+    },
+    {
+      "name": "重要限制",
+      "status": "WARN",
+      "value": "矩形是「并集」，无法挖洞 —— 宠物必须是单一连通轮廓"
+    },
+    {
+      "name": "映射表规模",
+      "status": "INFO",
+      "value": "10 类 / 163 个进程名"
+    },
+    {
+      "name": "自检命中率",
+      "status": "PASS",
+      "value": "163/163"
+    },
+    {
+      "name": "基线（无全屏应用）",
+      "status": "INFO",
+      "value": "state=5  QUNS_ACCEPTS_NOTIFICATIONS（正常）"
+    },
+    {
+      "name": "全屏期间的 QUNS",
+      "status": "PASS",
+      "value": "state ∈ {2}  QUNS_BUSY（全屏应用或演示设置）"
+    },
+    {
+      "name": "结论",
+      "status": "PASS",
+      "value": "QUNS 能真实反映「有全屏应用在跑」→ 全屏自动静默方案成立"
+    },
+    {
+      "name": "全屏覆盖期间能否采到宠物窗",
+      "status": "PASS",
+      "value": "全屏窗盖住了宠物（预期：此时宠物应已静默/隐藏）"
+    },
+    {
+      "name": "退出全屏后的 QUNS",
+      "status": "PASS",
+      "value": "state ∈ {5}  QUNS_ACCEPTS_NOTIFICATIONS（正常）"
+    },
+    {
+      "name": "宠物窗几何未被扰动",
+      "status": "PASS",
+      "value": "前 (1120,560) → 后 (1120,560)"
+    },
+    {
+      "name": "时间线",
+      "status": "INFO",
+      "value": "verify/quns-timeline.json"
+    }
+  ]
+}
