@@ -1,7 +1,7 @@
 原始光标位置：(1629, 1339)
 [app] 
 [app] [xiaoqi] ✓ QUNS 调用成功，当前 state=5
-[app] [xiaoqi] ✓ GetLastInputInfo 调用成功，空闲 585s
+[app] [xiaoqi] ✓ GetLastInputInfo 调用成功，空闲 769s
 [app] [xiaoqi] [renderer:uncaught] boot-checkpoint
 [app] [xiaoqi]    installErrorReporting() 已执行
 [app] [xiaoqi] 显示：窗口已显示（形态 active）
@@ -39,4 +39,12 @@
      光标 (2116, 996) → 实际 passthrough，期望 passthrough
 
 结果：7/7 项符合预期
+  视线探针「左下」→ gaze = (-0.96, 1.03)
+  视线探针「右下」→ gaze = (0.96, 1.03)
+[app] [xiaoqi] 穿透 → pet（光标 2426,1295；窗口 2316,1196 220×220；形态 active）
+  视线探针「正上」→ gaze = (0, -0.89)
+✅ ★ 视线随光标左右改变（左下的 gaze.x < 右下的 gaze.x）
+✅ ★ 视线随光标上下改变（正上的 gaze.y < 左下的 gaze.y）
+
+总计：9/9 项符合预期
 光标已还原到 (1629, 1339)

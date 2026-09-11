@@ -78,12 +78,135 @@ function runCursorTool(args) {
 
 const delay = (ms) => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * 通过 CDP 读渲染进程里的一个表达式。
+ *
+ * 本机不能用 DevTools 调试渲染进程（施工令 §4.3② 实测：DevTools 打开时
+ * 透明窗会变不透明），而 CDP 是**外部连接**，不打开任何 DevTools 窗口，
+ * 因此既能读到内部状态又不干扰窗口。
+ */
+async function withCdp(debugPort, fn) {
+  const deadline = Date.now() + 20000
+  let browserUrl = null
+  while (Date.now() < deadline && !browserUrl) {
+    try {
+      // 实测本机 Electron 只打印 browser WebSocket URL，HTTP 的 /json/list 会被拒，
+      // 所以走 browser 端点 + Target.attachToTarget(flatten)。
+      const res = await fetch(`http://127.0.0.1:${debugPort}/json/version`).catch(() => null)
+      if (res?.ok) {
+        const info = await res.json()
+        browserUrl = info.webSocketDebuggerUrl ?? null
+      }
+    } catch {
+      // 端口还没起
+    }
+    if (!browserUrl) await delay(300)
+  }
+  if (!browserUrl) throw new Error('拿不到 CDP browser WebSocket URL')
+
+  const ws = new WebSocket(browserUrl)
+  let nextId = 0
+  const pending = new Map()
+  const send = (method, params, session) => {
+    const id = ++nextId
+    const payload = { id, method, params: params ?? {} }
+    if (session) payload.sessionId = session
+    ws.send(JSON.stringify(payload))
+    return new Promise((resolve) => pending.set(id, resolve))
+  }
+  ws.addEventListener('message', (event) => {
+    const msg = JSON.parse(String(event.data))
+    if (msg.id && pending.has(msg.id)) {
+      pending.get(msg.id)(msg.result ?? msg.error)
+      pending.delete(msg.id)
+    }
+  })
+  await new Promise((resolve, reject) => {
+    ws.addEventListener('open', resolve)
+    ws.addEventListener('error', () => reject(new Error('WebSocket 连接失败')))
+  })
+
+  try {
+    let page = null
+    for (let i = 0; i < 30 && !page; i++) {
+      const res = await send('Target.getTargets')
+      page = (res?.targetInfos ?? []).find((t) => t.type === 'page')
+      if (!page) await delay(400)
+    }
+    if (!page) throw new Error('找不到 page 目标')
+    const attached = await send('Target.attachToTarget', { targetId: page.targetId, flatten: true })
+    const session = attached.sessionId
+    return await fn(async (expression) => {
+      const res = await send('Runtime.evaluate', { expression, returnByValue: true }, session)
+      return res?.result?.value
+    })
+  } finally {
+    ws.close()
+  }
+}
+
+/**
+ * 验证视线跟随：把光标放到宠物的左下 / 右下 / 正上方，
+ * 读回舞台的 gaze 向量，判断它是否**跟着方向变**。
+ *
+ * 只验"有偏移"是不够的（那可能是个常驻偏移），必须验"方向随之改变"。
+ * 整段复用**同一个 CDP 会话**——每次读都新开一个会话既慢又容易踩到端口竞争。
+ */
+async function verifyGaze({ win, runCursorTool, delay: wait, debugPort }) {
+  return withCdp(debugPort, async (evaluate) => {
+    const readGaze = async () =>
+      JSON.parse(
+        String(
+          await evaluate(
+            'JSON.stringify(typeof window.__petDebug === "function" ? window.__petDebug().gaze : null)',
+          ),
+        ),
+      )
+
+    const bodyCentre = PROBES_LOCAL.bodyCentre
+    const directions = [
+      { label: '左下', local: { x: bodyCentre.x - 40, y: bodyCentre.y + 40 } },
+      { label: '右下', local: { x: bodyCentre.x + 40, y: bodyCentre.y + 40 } },
+      { label: '正上', local: { x: bodyCentre.x, y: bodyCentre.y - 40 } },
+    ]
+
+    const samples = []
+    for (const dir of directions) {
+      await runCursorTool(['set', String(win.x + dir.local.x), String(win.y + dir.local.y)])
+      // 轮询 80ms + 渲染进程指数平滑（半衰期 0.12s），留足时间收敛
+      await wait(900)
+      const gaze = await readGaze()
+      samples.push({ ...dir, gaze })
+      console.log(`  视线探针「${dir.label}」→ gaze = (${String(gaze?.x)}, ${String(gaze?.y)})`)
+    }
+
+    const [left, right, up] = samples
+    let failures = 0
+    const check = (ok, label) => {
+      console.log(`${ok ? '✅' : '❌'} ${label}`)
+      if (!ok) failures++
+    }
+
+    check(
+      Boolean(left.gaze && right.gaze) && left.gaze.x < right.gaze.x,
+      '★ 视线随光标左右改变（左下的 gaze.x < 右下的 gaze.x）',
+    )
+    check(
+      Boolean(up.gaze && left.gaze) && up.gaze.y < left.gaze.y,
+      '★ 视线随光标上下改变（正上的 gaze.y < 左下的 gaze.y）',
+    )
+
+    return failures
+  })
+}
+
 async function main() {
   const original = JSON.parse(await runCursorTool(['get']))
   console.log(`原始光标位置：(${original.x}, ${original.y})`)
 
   const logs = []
-  const child = spawn(electronBinary(), ['.'], {
+  const debugPort = process.argv[2] ?? '9666'
+  const child = spawn(electronBinary(), ['.', `--remote-debugging-port=${debugPort}`], {
     cwd: process.cwd(),
     env: { ...process.env, XIAOQI_EVIDENCE_DIR: '' },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -195,6 +318,19 @@ async function main() {
     }
 
     console.log(`\n结果：${String(probes.length - failures)}/${String(probes.length)} 项符合预期`)
+
+    // ── 视线跟随 ──
+    //
+    // 它有一个很隐蔽的失效方式：如果主进程只在**穿透路由翻转**时才推状态，
+    // 那么宠物在光标进入轮廓的那一刻看一眼、之后眼睛就冻住了——
+    // 看起来像卡住（本机加完视线跟随之后真的引入过这个 bug）。
+    // 所以判据不是"有没有偏移"，而是"**光标换了方向之后偏移跟着换**"。
+    const gazeFailures = await verifyGaze({ win, runCursorTool, delay, debugPort })
+    failures += gazeFailures
+
+    console.log(
+      `\n总计：${String(probes.length + 2 - failures)}/${String(probes.length + 2)} 项符合预期`,
+    )
     if (failures > 0) process.exitCode = 1
   } finally {
     // 还原光标必须**尽最大努力**：即使前面的断言失败、或应用已经卡住，

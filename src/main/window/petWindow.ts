@@ -56,6 +56,8 @@ export class PetWindowController {
 
   #isAnimating = false
   #scale = 1
+  /** 上一次广播出去的光标位置，用来避免重复推送同样的值。 */
+  #lastBroadcastCursor: Point | null = null
 
   #cursorTimer: NodeJS.Timeout | null = null
   #qunsTimer: NodeJS.Timeout | null = null
@@ -284,22 +286,43 @@ export class PetWindowController {
       ? resolveCursorRoute(PET_GEOMETRY, bounds, point, this.#scale)
       : 'passthrough'
 
-    if (!shouldFlipIgnoreMouseEvents(this.#cursorRoute, next)) return
+    const routeChanged = shouldFlipIgnoreMouseEvents(this.#cursorRoute, next)
+    if (routeChanged) {
+      this.#cursorRoute = next
+      // 注意：**不加** `{ forward: true }`。理由见 core/cursorRouter.ts。
+      this.#window.setIgnoreMouseEvents(next === 'passthrough')
 
-    this.#cursorRoute = next
-    // 注意：**不加** `{ forward: true }`。理由见 core/cursorRouter.ts。
-    this.#window.setIgnoreMouseEvents(next === 'passthrough')
+      // 穿透开关翻转时打一行日志。这是**唯一**能证明"主进程真的按宠物轮廓翻转了
+      // 整窗开关"的证据——纯函数单测只证明算得对，证明不了它被执行了。
+      // 验收与排查都依赖这行日志（见 scripts/verify-clickthrough.mjs）。
+      this.#log(
+        `穿透 → ${next}（光标 ${String(Math.round(point.x))},${String(Math.round(point.y))}；` +
+          `窗口 ${String(bounds.x)},${String(bounds.y)} ${String(bounds.width)}×${String(bounds.height)}；` +
+          `形态 ${this.mode}）`,
+      )
+    }
 
-    // 穿透开关翻转时打一行日志。这是**唯一**能证明"主进程真的按宠物轮廓翻转了
-    // 整窗开关"的证据——纯函数单测只证明算得对，证明不了它被执行了。
-    // 验收与排查都依赖这行日志（见 scripts/verify-clickthrough.mjs）。
-    this.#log(
-      `穿透 → ${next}（光标 ${String(Math.round(point.x))},${String(Math.round(point.y))}；` +
-        `窗口 ${String(bounds.x)},${String(bounds.y)} ${String(bounds.width)}×${String(bounds.height)}；` +
-        `形态 ${this.mode}）`,
-    )
+    // ⚠️ 光标位置也要触发广播，而且**不能**只依赖上面那个"路由翻转"分支。
+    //
+    // 渲染进程的**视线跟随**需要持续拿到光标位置。如果只在路由翻转时推状态，
+    // 那么宠物在光标进入轮廓的那一刻看一眼、之后眼睛就冻住了——
+    // 看起来像卡住。这个 bug 是加完视线跟随之后才引入的。
+    //
+    // 代价：光标在宠物附近时，IPC 约每 80ms 一次（≈12 次/秒）。
+    // 可以接受，因为：① 只在光标接近窗口时才有值（远离时 `cursorInDesignSpace`
+    // 返回 null，前后相等就不广播）；② payload 极小。
+    const cursor = this.cursorInDesignSpace()
+    const cursorChanged =
+      (cursor === null) !== (this.#lastBroadcastCursor === null) ||
+      (cursor !== null &&
+        this.#lastBroadcastCursor !== null &&
+        (Math.round(cursor.x) !== Math.round(this.#lastBroadcastCursor.x) ||
+          Math.round(cursor.y) !== Math.round(this.#lastBroadcastCursor.y)))
 
-    this.#onStateChanged()
+    if (routeChanged || cursorChanged) {
+      this.#lastBroadcastCursor = cursor
+      this.#onStateChanged()
+    }
   }
 
   #cursorPoint(): Point | null {
