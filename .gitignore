@@ -65,3 +65,7 @@ docs/evidence/probe/
 # 注意顺序：`.gitignore` 的否定规则必须排在忽略规则**之后**才生效。
 !docs/evidence/clickthrough.log
 
+
+# 临时提交信息（用 git commit -F 时需要）
+.gitmsg/
+
