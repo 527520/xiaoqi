@@ -1,0 +1,239 @@
+import { QUNS_POLL_INTERVAL_MS } from '@shared/constants'
+import type { Emotion, UserNotificationState, WorkMode } from '@shared/types'
+
+import type { Platform } from '../platform'
+import {
+  INITIAL_PHYSIOLOGY,
+  stepEmotion,
+  stepPhysiology,
+  type EmotionState,
+  type Physiology,
+} from './physiology'
+import { CATEGORY_LABELS, type AppCategory } from './processTable'
+import { inferWorkMode } from './workMode'
+
+/**
+ * 感知轮询 + 状态推进。
+ *
+ * ── 三件事，一件事一个文件，这里只做"串起来"和"节流" ──
+ *
+ * - `platform/win32.ts`：怎么读三项信号（唯一允许调原生库的地方）
+ * - `core/workMode.ts` / `core/physiology.ts`：怎么推断（纯函数，可单测）
+ * - **本文件**：什么时候读、读到的值怎么累积成状态
+ *
+ * 之所以把"节流"单独放一层：感知轮询频率是**耗电与隐私的双重问题**——
+ * 读得越勤，CPU 越忙，而"我们多久看一眼用户"本身也是用户关心的事。
+ *
+ * ── 轮询频率是刻意的低频 ──
+ *
+ * 2 秒一次（与 QUNS 同频）。理由：
+ * ① 工作模式的变化是分钟级的（打开一个应用、进入会议），2 秒足够灵敏；
+ * ② 空闲时长的阈值是 20 分钟，更不需要高频；
+ * ③ 施工令 §4.3⑩ 明确「耗电是隐形差评源」。
+ *
+ * **不要为了"更实时"把它调到几百毫秒**：那既没有产品收益，
+ * 又会让任务管理器里出现一个持续占用 CPU 的进程。
+ */
+
+export interface PerceivedState {
+  /** 前台进程名（小写），`null` = 拿不到。**永不含窗口标题。** */
+  readonly processName: string | null
+  readonly category: AppCategory
+  readonly idleMs: number | null
+  readonly notificationState: UserNotificationState
+  readonly workMode: WorkMode
+  readonly workModeReason: string
+  readonly emotion: EmotionState
+  readonly physiology: Physiology
+  /** 连续使用同一应用类别的时长（毫秒）。 */
+  readonly sameCategoryMs: number
+  /** 上一次真正读到信号的时刻（毫秒）。 */
+  readonly sampledAt: number
+}
+
+export interface PerceptionOptions {
+  readonly platform: Platform
+  /** 状态变化时的回调（调试面板与渲染层用）。 */
+  readonly onState?: (state: PerceivedState) => void
+  /** 时钟注入，便于单测。默认 `Date.now`。 */
+  readonly now?: () => number
+}
+
+/**
+ * 感知器。用 `start()` / `dispose()` 管理生命周期。
+ *
+ * 没有做成"每次都读"的纯函数，是因为它要**跨轮次累积**两件事：
+ * ① 同一应用类别的连续时长（用于判定"专注"）；
+ * ② 生理量（随时间演进）。
+ * 但**判定逻辑全部是纯函数**，所以这个类只有"累积"这点状态，容易验证。
+ */
+export class Perception {
+  readonly #platform: Platform
+  readonly #onState: ((state: PerceivedState) => void) | null
+  readonly #now: () => number
+
+  #timer: NodeJS.Timeout | null = null
+  #disposed = false
+
+  #physiology: Physiology = INITIAL_PHYSIOLOGY
+  #emotion: EmotionState = { emotion: 'calm', since: 0 }
+  #category: AppCategory = 'unknown'
+  #sameCategorySince = 0
+  #lastStepAt = 0
+  #hadInteraction = false
+  #snapshot: PerceivedState | null = null
+
+  constructor(options: PerceptionOptions) {
+    this.#platform = options.platform
+    this.#onState = options.onState ?? null
+    this.#now = options.now ?? Date.now
+
+    // ⚠️ 时间基准必须在**构造时**初始化，不能等到 `start()`。
+    //
+    // 初版把这两个字段留成 0，于是第一次 tick 算出的 `elapsedMs`
+    // 是"从 1970 年到现在"，`sameCategoryMs` 报出 **2981 万分钟**，
+    // 直接被判成"专注"，同时生理量按 56 年推进、精力瞬间归零。
+    // 单测里"第一次 tick 应该是 coding"这条把它抓出来了。
+    //
+    // 教训：**"起点"这类状态不能依赖"某个方法先被调用"**——
+    // 只要存在一条不经过 `start()` 就能 tick 的路径（测试、调试面板、
+    // 或将来某个直接调 tick 的地方），就会静默地算出一个荒谬的值。
+    const now = this.#now()
+    this.#lastStepAt = now
+    this.#sameCategorySince = now
+    this.#emotion = { emotion: 'calm', since: now }
+  }
+
+  get snapshot(): PerceivedState | null {
+    return this.#snapshot
+  }
+
+  start(): void {
+    if (this.#disposed || this.#timer) return
+    this.tick()
+    this.#timer = setInterval(() => {
+      this.tick()
+    }, QUNS_POLL_INTERVAL_MS)
+  }
+
+  dispose(): void {
+    this.#disposed = true
+    if (this.#timer) clearInterval(this.#timer)
+    this.#timer = null
+  }
+
+  /** 用户与宠物互动了（喂食、点击）。会影响生理与情绪。 */
+  noteInteraction(): void {
+    this.#hadInteraction = true
+  }
+
+  /**
+   * 推进一拍。公开是为了让测试能手动驱动，不必等真实计时器。
+   */
+  tick(): PerceivedState {
+    const now = this.#now()
+    const elapsedMs = Math.max(0, now - this.#lastStepAt)
+    this.#lastStepAt = now
+
+    // ── 读三项信号 ──
+    const processName = this.#platform.getForegroundProcessName()
+    const idleMs = this.#platform.getIdleMilliseconds()
+    const notificationState = this.#platform.queryUserNotificationState()
+
+    // ── 先推断工作模式（它同时给出类别），再累积"连续同一类别"的时长 ──
+    //
+    // 顺序很重要：`sameCategoryMs` 是 `inferWorkMode` 的输入之一，
+    // 而类别是它的输出。所以先用"上一拍的连续时长"推断，再更新累积值——
+    // 反过来会用到未来信息（本拍的类别还没算出来）。
+    const work = inferWorkMode({
+      processName,
+      idleMs,
+      notificationState,
+      now: new Date(now),
+      sameCategoryMs: now - this.#sameCategorySince,
+    })
+
+    if (work.category !== this.#category) {
+      this.#category = work.category
+      this.#sameCategorySince = now
+    }
+    const sameCategoryMs = now - this.#sameCategorySince
+
+    // ── 推进生理与情绪（时间作为参数传入，因此可用假时钟测试）──
+    this.#physiology = stepPhysiology(this.#physiology, elapsedMs, work.mode, this.#hadInteraction)
+    this.#hadInteraction = false
+
+    // 互动是一个**瞬时**情绪，优先于基础情绪，但只持续很短时间。
+    // 这条不放进 physiology（那是慢变量），放在这里更清楚。
+    const sinceInteraction = now - this.#emotion.since
+    const interactionActive =
+      this.#emotion.emotion === 'surprised' && sinceInteraction < INTERACTION_EMOTION_WINDOW_MS
+
+    if (!interactionActive) {
+      this.#emotion = stepEmotion(this.#emotion, this.#physiology, work.mode, now)
+    }
+
+    const state: PerceivedState = {
+      processName,
+      category: work.category,
+      idleMs,
+      notificationState,
+      workMode: work.mode,
+      workModeReason: work.reason,
+      emotion: this.#emotion,
+      physiology: this.#physiology,
+      sameCategoryMs,
+      sampledAt: now,
+    }
+    this.#snapshot = state
+    this.#onState?.(state)
+    return state
+  }
+
+  /**
+   * 记一次瞬时情绪（例如"被拍了一下"）。
+   *
+   * 与 `noteInteraction` 分开：那个是"用户伸手了"（影响生理），
+   * 这个是"当下该摆什么表情"（影响情绪）。
+   *
+   * ⚠️ 必须**同时更新缓存的快照**。初版只改了 `#emotion`，
+   *    于是 `snapshot.emotion` 会停留在上一拍的值——对外可见的状态
+   *    与内部状态不一致，直到下一次 tick 才对上。
+   *    调试面板与渲染层读的都是 `snapshot`，所以这个不一致是**看得见**的。
+   */
+  flashEmotion(emotion: Emotion): void {
+    const next: EmotionState = { emotion, since: this.#now() }
+    this.#emotion = next
+    if (this.#snapshot) {
+      this.#snapshot = { ...this.#snapshot, emotion: next }
+      this.#onState?.(this.#snapshot)
+    }
+  }
+
+  /** 给调试面板用的可读摘要。**不含任何用户内容**（只有进程名与聚合量）。 */
+  describe(): string[] {
+    const s = this.#snapshot
+    if (!s) return ['（还没有采样）']
+    return [
+      `前台进程：${s.processName ?? '（拿不到）'}  →  类别：${CATEGORY_LABELS[s.category]}`,
+      `空闲时长：${s.idleMs === null ? '不可用' : `${String(Math.round(s.idleMs / 1000))}s`}`,
+      `系统状态：QUNS=${String(s.notificationState)}`,
+      `工作模式：${s.workMode}（${s.workModeReason}）`,
+      `情绪：${s.emotion.emotion}`,
+      `生理：精力 ${pct(s.physiology.energy)} / 饥饿 ${pct(s.physiology.hunger)} / 无聊 ${pct(
+        s.physiology.boredom,
+      )} / 社交 ${pct(s.physiology.social)}`,
+      `同类工具连续：${String(Math.round(s.sameCategoryMs / 1000))}s`,
+    ]
+  }
+}
+
+function pct(value: number): string {
+  return `${String(Math.round(value * 100))}%`
+}
+
+/**
+ * 瞬时情绪（`surprised`，即"被拍了一下"）持续多久（毫秒）。
+ * 略长于主进程那边的交互动画时长（0.95s），让表情先于动作结束。
+ */
+const INTERACTION_EMOTION_WINDOW_MS = 1200
