@@ -285,30 +285,36 @@ export class PetStage {
   }
 
   #drawEyes(): void {
-    // ★ 眼睛的写法（含一次代价很高的实测教训，改之前请读完）★
+    // ★ 眼睛的写法（含一次代价很高的排查，改之前请读完）★
     //
     // 做法：形状画在 `Graphics` 的**局部原点 (0,0)**，再把整个 Graphics
     // 平移到眼睛坐标。这样"Graphics 原点 = 眼睛中心 = 缩放锚点"三者重合，
     // 眨眼时按 y 缩放就是以眼心为锚点压扁，**完全不需要 pivot**。
     //
     // ⚠️ 不要把眼睛放进一层中间 `Container` 再靠 `pivot`/`position` 定位。
-    //    本机为此排查了很久，实测记录如下（在受控最小复现里量过）：
+    //    这里记录**两条确实被量到的事实**，以及一条**我没有定论**的观察。
     //
-    //    - Pixi v8 的 `position` 是**被 `pivot` 偏移过的**：
+    //    【事实 1｜可直接复现】Pixi v8 的 `position` 是**被 `pivot` 偏移过的**：
     //          pivot=(0,0)    position=(100,120) → worldTransform.tx=100, ty=120  ✅
     //          pivot=(100,60) position=(100,60)  → worldTransform.tx=0,   ty=0    ❌
     //      即 `pivot == position` 会把内容画到**父容器原点**。
+    //      这是在受控最小复现里量出来的，与下面的观察无关，独立成立。
     //
-    //    - 更麻烦的是：把两只眼睛各自包一层 `Container` 后，
-    //      眼睛**一个像素都不画**，而且不报任何错——
-    //      canvas 正常、`visible`/`renderable` 全为 true、`getLocalBounds()`
-    //      和 `worldTransform` 都"看起来正确"（tx=90, ty=133）。
-    //      同一段绘制代码换成一个直接挂在 root 上的临时 Graphics 就正常渲染，
-    //      所以问题出在"包一层容器"这条路径上。
-    //      **具体是哪个共享状态导致的，我没有定位到根因**，只确认了规避方式。
+    //    【观察｜结论存疑】当时把两只眼睛各包一层 `Container`（pivot 设 (0,0)、
+    //      position 设眼睛坐标）后，看到的现象是眼睛**一个像素都不画**，
+    //      且不报任何错：canvas 正常、`visible`/`renderable` 全为 true、
+    //      `getLocalBounds()` 与 `worldTransform` 都"看起来正确"（tx=90, ty=133）。
     //
-    //    因此这里选择"不套容器、不用 pivot"的写法：它绕开了上面两个失效面，
-    //    而且仍然满足眨眼的需求（缩放锚点就是 Graphics 自己的原点）。
+    //      ⚠️ **但这条观察后来被发现有混淆因素**：同一个 `useEffect` 里还有一个
+    //      真实的 bug —— React 19 StrictMode 会挂载两次，而当时
+    //      `window.__petDebug` 钩子可能仍指向**已被销毁的第一个 Application**。
+    //      那个已销毁实例的场景图恰好也"看起来完全正常"。
+    //      所以我**无法确定**当年的"不渲染"是容器路径本身的问题，
+    //      还是读到了死实例的快照。根因**未定位**，不要引用为"容器有 bug"。
+    //
+    //    当前写法（不套容器、不用 pivot）依然保留，理由只剩一条且足够：
+    //    它让"容器原点 = 眼睛中心 = 缩放锚点"三者重合，绕开了【事实 1】，
+    //    同时满足眨眼需求，且比多一层容器更少间接。
     for (const [graphics, eye] of [
       [this.#eyeLeftGraphics, PET_FACE.eyeLeft],
       [this.#eyeRightGraphics, PET_FACE.eyeRight],

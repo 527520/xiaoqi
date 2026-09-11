@@ -1,7 +1,7 @@
 原始光标位置：(500, 500)
 [app] 
 [app] [xiaoqi] ✓ QUNS 调用成功，当前 state=5
-[app] [xiaoqi] ✓ GetLastInputInfo 调用成功，空闲 804s
+[app] [xiaoqi] ✓ GetLastInputInfo 调用成功，空闲 1116s
 [app] [xiaoqi] [renderer:uncaught] boot-checkpoint
 [app] [xiaoqi]    installErrorReporting() 已执行
 [app] [xiaoqi] 显示：窗口已显示（形态 active）

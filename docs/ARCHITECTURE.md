@@ -56,12 +56,12 @@
 
 ### 铁律（由自动化测试与 lint 守护，不靠自觉）
 
-| 铁律 | 守护方式 |
-|---|---|
-| `core/` 不得 `import electron`，不得 `require('koffi')` | `src/main/core/boundary.test.ts` 文本断言 |
-| `koffi` 只允许在 `platform/win32.ts` 出现 | 同上的第 4 个用例 + eslint `no-restricted-imports` |
+| 铁律                                                           | 守护方式                                               |
+| -------------------------------------------------------------- | ------------------------------------------------------ |
+| `core/` 不得 `import electron`，不得 `require('koffi')`        | `src/main/core/boundary.test.ts` 文本断言              |
+| `koffi` 只允许在 `platform/win32.ts` 出现                      | 同上的第 4 个用例 + eslint `no-restricted-imports`     |
 | `disable-features` 必须**恰好一次**且在 `app.whenReady()` 之前 | eslint 自定义规则 `xiaoqi/disable-features-invariants` |
-| 宠物几何只有一个真相源 | 图标脚本启动自检；命中测试与渲染共用 `PET_GEOMETRY` |
+| 宠物几何只有一个真相源                                         | 图标脚本启动自检；命中测试与渲染共用 `PET_GEOMETRY`    |
 
 ### 数据流（M1 现状）
 
@@ -86,14 +86,14 @@ Win32 (koffi)                       Electron
 定义在 `src/shared/ipc.ts`。preload **只暴露这些通道**，不暴露 `ipcRenderer` 本身
 （一旦整个交出去，白名单就形同虚设）。
 
-| 通道 | 方向 | 类型 | 载荷 | 说明 |
-|---|---|---|---|---|
-| `state:get` | 渲染 → 主 | invoke | — → `PetRuntimeState` | 启动时拉一次完整快照 |
-| `mode:set` | 渲染 → 主 | invoke | `VisibilityMode` → `PetRuntimeState` | 手动设置形态 |
-| `pet:interact` | 渲染 → 主 | send | — | 用户点了宠物 |
-| `pet:animating` | 渲染 → 主 | send | `boolean` | 交互动画开始/结束，用于帧率降档 |
-| `renderer:error` | 渲染 → 主 | **sendSync** | `message, stack` | 未捕获错误 + 堆栈 → 主进程日志 |
-| `state:changed` | 主 → 渲染 | on | `PetRuntimeState` | 状态变化推送 |
+| 通道             | 方向      | 类型         | 载荷                                 | 说明                            |
+| ---------------- | --------- | ------------ | ------------------------------------ | ------------------------------- |
+| `state:get`      | 渲染 → 主 | invoke       | — → `PetRuntimeState`                | 启动时拉一次完整快照            |
+| `mode:set`       | 渲染 → 主 | invoke       | `VisibilityMode` → `PetRuntimeState` | 手动设置形态                    |
+| `pet:interact`   | 渲染 → 主 | send         | —                                    | 用户点了宠物                    |
+| `pet:animating`  | 渲染 → 主 | send         | `boolean`                            | 交互动画开始/结束，用于帧率降档 |
+| `renderer:error` | 渲染 → 主 | **sendSync** | `message, stack`                     | 未捕获错误 + 堆栈 → 主进程日志  |
+| `state:changed`  | 主 → 渲染 | on           | `PetRuntimeState`                    | 状态变化推送                    |
 
 **为什么 `renderer:error` 用 `sendSync`**：宠物启动期的错误可能发生在
 "渲染进程已开始执行、主进程日志却还没建立"的时间窗里，异步消息会晚到甚至丢在
@@ -111,12 +111,12 @@ SQLite + **FTS5**。施工令 §5 M3 明确「**不引入任何向量库**」—
 
 ### 四层记忆
 
-| 表 | 语义 | 对应 `CONTEXT.md` |
-|---|---|---|
-| `episodic` | 带时间戳的事件记录，按遗忘曲线衰减 | **情景记忆** |
-| `semantic` | 关于用户的稳定事实，由反复出现的情景记忆升级而来 | **语义记忆** |
-| `emotional` | 带情绪标签的事件，**衰减最慢** | **情感记忆** |
-| `working` | 当前会话的短期上下文 | 工作记忆 |
+| 表          | 语义                                             | 对应 `CONTEXT.md` |
+| ----------- | ------------------------------------------------ | ----------------- |
+| `episodic`  | 带时间戳的事件记录，按遗忘曲线衰减               | **情景记忆**      |
+| `semantic`  | 关于用户的稳定事实，由反复出现的情景记忆升级而来 | **语义记忆**      |
+| `emotional` | 带情绪标签的事件，**衰减最慢**                   | **情感记忆**      |
+| `working`   | 当前会话的短期上下文                             | 工作记忆          |
 
 ```sql
 -- 情景记忆
@@ -192,46 +192,47 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(
   // ── 它是什么样 ──（对应"养它"语气的第一层）
   "persona": {
     "name": "小奇",
-    "personality": "gentle",        // "gentle" | "tsundere"（首发只有两种；§5 M5）
-    "chattiness": 0.3,              // 0..1 话痨度
-    "sarcasm": 0.1,                 // 0..1 毒舌度
-    "proactiveness": 0.15,          // ★ 主动度：默认必须低（§9.1「宁可少说话」）
-    "addressAs": "你",              // 称呼
-    "forbiddenWords": []            // 禁忌词
+    "personality": "gentle", // "gentle" | "tsundere"（首发只有两种；§5 M5）
+    "chattiness": 0.3, // 0..1 话痨度
+    "sarcasm": 0.1, // 0..1 毒舌度
+    "proactiveness": 0.15, // ★ 主动度：默认必须低（§9.1「宁可少说话」）
+    "addressAs": "你", // 称呼
+    "forbiddenWords": [], // 禁忌词
   },
 
   // ── 它做什么 ──
   "behavior": {
-    "skills": {},                   // 技能 id → { enabled, params }
-    "dnd": {                        // 勿扰时段（默认含深夜）
+    "skills": {}, // 技能 id → { enabled, params }
+    "dnd": {
+      // 勿扰时段（默认含深夜）
       "enabled": true,
-      "ranges": [{ "from": "23:00", "to": "08:00" }]
+      "ranges": [{ "from": "23:00", "to": "08:00" }],
     },
-    "autoStart": false,             // ★ 开机自启默认关，且引导里不提（§5 M6）
+    "autoStart": false, // ★ 开机自启默认关，且引导里不提（§5 M6）
     "appearance": {
       "scale": 1.0,
       "alwaysOnTop": true,
-      "hideOnFullscreen": true      // QUNS {1,2,3,4} → 静默
-    }
+      "hideOnFullscreen": true, // QUNS {1,2,3,4} → 静默
+    },
   },
 
   // ── 它知道什么 ──（感知授权；措辞用行为语言，不用"权限等级"）
   "perception": {
-    "foregroundProcess": true,      // "它只会认得你在用什么软件，不知道你在看什么"
+    "foregroundProcess": true, // "它只会认得你在用什么软件，不知道你在看什么"
     "idleTime": true,
-    "systemState": true,            // 全屏/锁屏/电池/时间
-    "windowTitle": false,           // ★ v0.1 恒为 false，不暴露开关（ADR-0002）
-    "processAllowlist": []          // 按**进程**分级，不按数据类型分级
+    "systemState": true, // 全屏/锁屏/电池/时间
+    "windowTitle": false, // ★ v0.1 恒为 false，不暴露开关（ADR-0002）
+    "processAllowlist": [], // 按**进程**分级，不按数据类型分级
   },
 
   "api": {
     "baseUrl": "",
     "model": "",
-    "dailyTokenBudget": 200000,     // 默认开启预算
-    "budgetEnabled": true
+    "dailyTokenBudget": 200000, // 默认开启预算
+    "budgetEnabled": true,
   },
 
-  "debug": { "showStatusPanel": false }
+  "debug": { "showStatusPanel": false },
 }
 ```
 
@@ -248,7 +249,7 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(
 ```jsonc
 {
   "manifestVersion": 1,
-  "id": "example-plugin",             // ^[a-z0-9][a-z0-9_-]{0,63}$
+  "id": "example-plugin", // ^[a-z0-9][a-z0-9_-]{0,63}$
   "name": "示例插件",
   "version": "0.1.0",
   "description": "证明插件接口对外可用",
@@ -256,23 +257,30 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(
 
   // ★ 声明式感知需求：宿主按用户已授权的范围决定"满足哪些"，
   //   插件**不能**自己读感知信号。缺失的需求不会让插件崩溃，只是不触发。
-  "perception": ["foregroundProcess", "idleTime"],   // 只能是 §1.1 的三项
+  "perception": ["foregroundProcess", "idleTime"], // 只能是 §1.1 的三项
 
   // 触发条件：全部为声明式，宿主求值
   "triggers": [
     { "type": "mode", "value": "coding" },
     { "type": "idle", "minSeconds": 300 },
-    { "type": "schedule", "cron": "0 10 * * *" }
+    { "type": "schedule", "cron": "0 10 * * *" },
   ],
 
-  "config": [                          // 配置项 schema → M6 自动生成界面
-    { "key": "interval", "type": "number", "label": "间隔（分钟）", "default": 45,
-      "min": 5, "max": 240 }
+  "config": [
+    // 配置项 schema → M6 自动生成界面
+    {
+      "key": "interval",
+      "type": "number",
+      "label": "间隔（分钟）",
+      "default": 45,
+      "min": 5,
+      "max": 240,
+    },
   ],
 
-  "memory": { "read": ["semantic"], "write": ["episodic"] },  // 记忆写入声明
+  "memory": { "read": ["semantic"], "write": ["episodic"] }, // 记忆写入声明
 
-  "entry": "index.js"                  // 相对插件目录
+  "entry": "index.js", // 相对插件目录
 }
 ```
 

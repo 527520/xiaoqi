@@ -45,8 +45,32 @@ export function usePetStage(
     if (!container) return
 
     let disposed = false
+    // `app.init()` 是异步的。要区分"初始化完成"与"只是构造了 Application"——
+    // 对**尚未 init 完成**的实例调用 `destroy()` 会抛
+    // `this._cancelResize is not a function`（Pixi 内部插件还没注册上）。
+    //
+    // 这条路径在 React 19 的 StrictMode 下**必然**会被走到：开发模式会
+    // 挂载 → 卸载 → 再挂载，于是卸载时 `init()` 往往还没 await 完。
+    // 生产构建不会有这个双挂载，但清理逻辑本身必须对两种情况都正确。
+    let initialized = false
+    let destroyed = false
     const app = new Application()
     let stage: PetStage | null = null
+
+    /** 幂等且带保护地销毁渲染器。 */
+    const safeDestroy = (): void => {
+      if (destroyed) return
+      destroyed = true
+      if (!initialized) return // 未 init 完成：没有可释放的资源，destroy 反而会抛
+      try {
+        // destroy(true) 会一并移除 canvas，卸载后不留 DOM 残渣。
+        app.destroy(true)
+      } catch (error) {
+        // 销毁失败不该让整个宠物挂掉——记录即可，别把异常抛进 React 的
+        // effect 清理链（那会让错误边界接管并整屏空白）。
+        console.warn('[xiaoqi] Pixi Application 销毁失败：', error)
+      }
+    }
 
     const boot = async (): Promise<void> => {
       await app.init({
@@ -74,9 +98,11 @@ export function usePetStage(
         autoStart: false,
       })
 
-      // init 是异步的：期间组件可能已经卸载。
+      initialized = true
+
+      // init 期间组件可能已经卸载（StrictMode 下必然发生一次）。
       if (disposed) {
-        app.destroy(true)
+        safeDestroy()
         return
       }
 
@@ -103,6 +129,13 @@ export function usePetStage(
       // 也**不要用 `process.env`**：渲染进程是 `sandbox: true` 的，
       // 里面没有 `process`，引用它会抛 ReferenceError
       // （而且是在模块求值期抛，整个渲染进程挂掉，极难定位）。
+      //
+      // ⚠️ 这两个钩子必须**绑定到当前这个实例**，且在卸载后要让位：
+      //    React 19 的 StrictMode 下会挂载两次，如果再挂载的实例不覆盖它们，
+      //    读到的是**上一个已经被 destroy 的 Application**——它的场景图
+      //    "看起来完全正常"（visible/renderable 全 true、世界坐标也对），
+      //    但一个像素都不画。本机因此把"宠物没有眼睛"排查了很久：
+      //    读到的快照其实来自一个已经销毁的渲染器。
       Reflect.set(window, '__petDebug', () => stage?.debugSnapshot() ?? null)
       Reflect.set(window, '__petLayer', (layer: string, visible: boolean) => {
         stage?.debugSetLayerVisible(
@@ -128,8 +161,17 @@ export function usePetStage(
       disposed = true
       stageRef.current = null
       stage = null
-      // destroy(true) 会一并移除 canvas，卸载后不留 DOM 残渣。
-      app.destroy(true)
+      // 卸载时把诊断钩子摘掉，避免在 StrictMode 的"卸载 → 再挂载"间隙里
+      // 读到已销毁的实例（那个实例的场景图"看起来正常"但不画任何东西，
+      // 是本轮最容易误导人的一个陷阱）。再挂载的实例会立刻重装自己的钩子。
+      //
+      // 用 `Reflect` 而不是 `typeof window.__petDebug`：
+      // 后者在 TS 里会因为 `__petDebug` 未声明而报 TS2339。
+      // 这两个键是运行期动态挂的调试出口，本来就不该进 `Window` 的类型声明
+      // （进了就等于把它变成公开 API）。
+      Reflect.deleteProperty(window, '__petDebug')
+      Reflect.deleteProperty(window, '__petLayer')
+      safeDestroy()
     }
   }, [containerRef])
 

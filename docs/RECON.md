@@ -8,13 +8,13 @@
 
 ## 许可证边界总表
 
-| 项目 | 许可证 | 能否借鉴代码 | 依据 |
-|---|---|---|---|
-| [OpenPetsHQ/openpets](https://github.com/OpenPetsHQ/openpets) | **MIT** | ✅ 可借鉴/改编代码 | API 返回 `license.spdx_id = MIT`（1,184★，TypeScript，最后推送 2026-09-05） |
-| [ayangweb/BongoCat](https://github.com/ayangweb/BongoCat) | **MIT** | ✅ 可借鉴代码（但技术栈为 Tauri/Rust，见下） | API 返回 `license.spdx_id = MIT`（23,084★，Vue，最后推送 2026-09-11） |
-| [rullerzhou-afk/clawd-on-desk](https://github.com/rullerzhou-afk/clawd-on-desk) | **AGPL-3.0** | ⛔ **绝不抄代码**，仅可读设计 | API 返回 `AGPL-3.0`（6,202★）。README 明确 artwork 与 theme 资产**不在 AGPL 覆盖范围内**，各自版权保留 |
-| [ChaozhongLiu/DyberPet](https://github.com/ChaozhongLiu/DyberPet) | **GPL-3.0** | ⛔ **绝不抄代码**，仅可读设计 | API 返回 `GPL-3.0`（972★，Python/PySide6） |
-| [Adrianotiger/desktopPet](https://github.com/Adrianotiger/desktopPet) | **无许可证** | ⛔ **禁止抄代码**，仅可读设计 | API `license` 字段为空（`spdx_id` 与 `name` 均为空串）；仓库根目录 `contents/` 列表无 `LICENSE`（1,144★，C#） |
+| 项目                                                                            | 许可证       | 能否借鉴代码                                 | 依据                                                                                                          |
+| ------------------------------------------------------------------------------- | ------------ | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| [OpenPetsHQ/openpets](https://github.com/OpenPetsHQ/openpets)                   | **MIT**      | ✅ 可借鉴/改编代码                           | API 返回 `license.spdx_id = MIT`（1,184★，TypeScript，最后推送 2026-09-05）                                   |
+| [ayangweb/BongoCat](https://github.com/ayangweb/BongoCat)                       | **MIT**      | ✅ 可借鉴代码（但技术栈为 Tauri/Rust，见下） | API 返回 `license.spdx_id = MIT`（23,084★，Vue，最后推送 2026-09-11）                                         |
+| [rullerzhou-afk/clawd-on-desk](https://github.com/rullerzhou-afk/clawd-on-desk) | **AGPL-3.0** | ⛔ **绝不抄代码**，仅可读设计                | API 返回 `AGPL-3.0`（6,202★）。README 明确 artwork 与 theme 资产**不在 AGPL 覆盖范围内**，各自版权保留        |
+| [ChaozhongLiu/DyberPet](https://github.com/ChaozhongLiu/DyberPet)               | **GPL-3.0**  | ⛔ **绝不抄代码**，仅可读设计                | API 返回 `GPL-3.0`（972★，Python/PySide6）                                                                    |
+| [Adrianotiger/desktopPet](https://github.com/Adrianotiger/desktopPet)           | **无许可证** | ⛔ **禁止抄代码**，仅可读设计                | API `license` 字段为空（`spdx_id` 与 `name` 均为空串）；仓库根目录 `contents/` 列表无 `LICENSE`（1,144★，C#） |
 
 > **判定规则（本项目沿用）**：许可证不明确 = 视为「保留所有权利」，只做设计阅读，不复制任何代码、配置或素材。
 > BongoCat 为 MIT，但其实现是 Rust + Tauri v2，与我们的 Electron 栈不可直接复用代码，**只能借鉴它的产品思路与平台适配结论**。
@@ -51,7 +51,7 @@
 - 宠物包 = `pet.json` + `spritesheet.webp`。`pet.json` 字段：`id`、`displayName`、`description`、`spritesheetPath`，可选 `category`/`subcategory`/`sourceUrl`/`xHandle`。
 - 精灵表是**帧网格**，帧尺寸**至少 192×208**；缩略图从精灵表派生。Codex V1 约定为 **8×9** 图集（9 行标准动画）；V2 需 `pet.json` 带 `"spriteVersionNumber": 2` 且源图是**可完整解码、带 alpha 的单图 WebP**、精确 **1536×2288（8×11）** 网格，否则在原子导入写入任何东西之前就被拒绝。
 - **渲染方式是 CSS sprite 动画**（不是 PixiJS）：`pet-window.ts` 用 CSS 渲染选定动画。等待动画周期是全局偏好：Normal 用默认 `1010 ms`，Relaxed 用 `2200 ms`；渲染进程**重新推导**一张精灵状态表而不去改 `defaultPetSprite.states`。
-- **三层解耦（强烈建议照搬）**：`reaction-animation-mapping.ts` 把 reaction 解析成精灵动画状态（`resolveReactionSpriteState`）；`reaction-messages.ts` 从文案池选一句话；`pet-window.ts` 负责渲染。可选的动画状态为 idle、review、running、waiting、waving、jumping、failed。**映射是用户可配置的**，覆盖项持久化在 app state 里。设计意图明确写着：Agent 与插件只说 *reaction*，宿主拥有「长什么样、说什么」。
+- **三层解耦（强烈建议照搬）**：`reaction-animation-mapping.ts` 把 reaction 解析成精灵动画状态（`resolveReactionSpriteState`）；`reaction-messages.ts` 从文案池选一句话；`pet-window.ts` 负责渲染。可选的动画状态为 idle、review、running、waiting、waving、jumping、failed。**映射是用户可配置的**，覆盖项持久化在 app state 里。设计意图明确写着：Agent 与插件只说 _reaction_，宿主拥有「长什么样、说什么」。
 - 三种来源：内置宠物（`built-in-pet.ts`，离线兜底）、目录宠物（解压到 `userData/pets/{id}/`）、Codex 宠物（从 `~/.codex/pets/` 导入，本地创作工作流）。
 - **ZIP 安全（值得抄的硬约束）**：只允许 allowlist 上的 HTTPS 目录/ZIP 主机；禁止加密条目；只允许 stored/deflate；校验 Unix mode；必需文件 `pet.json` + `spritesheet.webp`；`yauzl` 严格条目校验（**无路径穿越、无符号链接、大小写冲突检测、大小/文件数上限**）；原子解压（临时目录 → rename）；独立安装器限额 50 MB 下载 / 200 MB 解压 / 500 文件 / 100 MB 单文件，并用 `.install-pet.lock`（10 分钟过期）防并发。`id` 必须匹配 `^[a-z0-9][a-z0-9_-]{0,63}$` 且不能叫 `builtin`。
 - **图片协议与 CSP**：宠物图片通过内部协议（`openpets-codex:`、`openpets-installed:`、`openpets-pet-preview:`）提供给渲染进程。**任何新协议或新图片来源都必须同时加进 `vite.config.ts` 和 `src/renderer/index.html` 的 CSP**，否则图片会静默回退到默认宠物 —— 文档直接称这是「为什么我的宠物显示错精灵」这类 bug 的**头号原因**。
@@ -166,18 +166,18 @@
 
 ## 明确不采纳的做法（附理由）
 
-| 不采纳 | 出处 | 理由 |
-|---|---|---|
-| 直接复用 BongoCat 代码 | BongoCat | MIT 但为 **Tauri v2 + Rust + Vue + Live2D**，与 Electron 44 + TS + React + PixiJS 不同构；资源格式（`cat.model3.json`/`.moc3`）也不兼容 |
-| Live2D 模型格式 | BongoCat | 我们已定 PNG 帧序列 + `pet.json`；Live2D 引入 Cubism Core 与授权复杂度 |
-| 16 ms 无限置顶轮询 | BongoCat `windows.rs` | 每帧一次的 `SetWindowPos` 是持续的 CPU/消息开销；且已导致右键菜单被盖住的副作用。用 openpets 的 1 s 重断言 + cache-bust 替代 |
-| 整屏 `opacity: 0` 实现 hide-on-hover | BongoCat `useDevice.ts` | 会让宠物变不可见但仍占位/仍渲染；应优先「暂停渲染 + 穿透」，避免无谓绘制 |
-| 每一帧都写入窗口位置的多写入者循环 | openpets 反面教材 | openpets 明确删除了所有逐宠物 step 循环以消除竞争写入导致的抖动 |
-| 直接采用 clawd 的 `theme.json` 结构或素材 | clawd-on-desk | **AGPL-3.0，且 artwork/主题资产明确不在 AGPL 覆盖内、各自版权保留**。连素材都不能拿 |
-| 采用 DyberPet 的任何代码/配置 | DyberPet | **GPL-3.0**，传染性许可证 |
-| 采用 desktopPet 的任何代码/素材 | Adrianotiger/desktopPet | **无 LICENSE = 保留所有权利**，`Pets/` 素材同样不可用 |
-| 自动更新走明文 HTTP 或第三方加速端点 | BongoCat `tauri.conf.json` | 其 updater 配了 `dangerousInsecureTransportProtocol: true` 和 `/gh-proxy.com/` 代理端点。我们不复制这种降级 |
-| 全屏时把宠物强行压在游戏/视频之上 | openpets 的选择 | openpets 明确选择「保持在全屏内容之上」（1 s 重断言 + 禁用遮挡跟踪）。**这与我们「别烦人」的原则冲突** —— 见下节，应改为**全屏时自动隐藏**（此处两种路线存在取舍，需用户拍板，已列入未确认事项） |
+| 不采纳                                    | 出处                       | 理由                                                                                                                                                                                             |
+| ----------------------------------------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 直接复用 BongoCat 代码                    | BongoCat                   | MIT 但为 **Tauri v2 + Rust + Vue + Live2D**，与 Electron 44 + TS + React + PixiJS 不同构；资源格式（`cat.model3.json`/`.moc3`）也不兼容                                                          |
+| Live2D 模型格式                           | BongoCat                   | 我们已定 PNG 帧序列 + `pet.json`；Live2D 引入 Cubism Core 与授权复杂度                                                                                                                           |
+| 16 ms 无限置顶轮询                        | BongoCat `windows.rs`      | 每帧一次的 `SetWindowPos` 是持续的 CPU/消息开销；且已导致右键菜单被盖住的副作用。用 openpets 的 1 s 重断言 + cache-bust 替代                                                                     |
+| 整屏 `opacity: 0` 实现 hide-on-hover      | BongoCat `useDevice.ts`    | 会让宠物变不可见但仍占位/仍渲染；应优先「暂停渲染 + 穿透」，避免无谓绘制                                                                                                                         |
+| 每一帧都写入窗口位置的多写入者循环        | openpets 反面教材          | openpets 明确删除了所有逐宠物 step 循环以消除竞争写入导致的抖动                                                                                                                                  |
+| 直接采用 clawd 的 `theme.json` 结构或素材 | clawd-on-desk              | **AGPL-3.0，且 artwork/主题资产明确不在 AGPL 覆盖内、各自版权保留**。连素材都不能拿                                                                                                              |
+| 采用 DyberPet 的任何代码/配置             | DyberPet                   | **GPL-3.0**，传染性许可证                                                                                                                                                                        |
+| 采用 desktopPet 的任何代码/素材           | Adrianotiger/desktopPet    | **无 LICENSE = 保留所有权利**，`Pets/` 素材同样不可用                                                                                                                                            |
+| 自动更新走明文 HTTP 或第三方加速端点      | BongoCat `tauri.conf.json` | 其 updater 配了 `dangerousInsecureTransportProtocol: true` 和 `/gh-proxy.com/` 代理端点。我们不复制这种降级                                                                                      |
+| 全屏时把宠物强行压在游戏/视频之上         | openpets 的选择            | openpets 明确选择「保持在全屏内容之上」（1 s 重断言 + 禁用遮挡跟踪）。**这与我们「别烦人」的原则冲突** —— 见下节，应改为**全屏时自动隐藏**（此处两种路线存在取舍，需用户拍板，已列入未确认事项） |
 
 ---
 
