@@ -14,6 +14,7 @@
  */
 
 import { spawn } from 'node:child_process'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** 宠物身体中心（设计空间），用来算"从哪里抓住它"。 */
@@ -110,6 +111,25 @@ setTimeout(() => {
 async function main() {
   const original = JSON.parse(await runCursorTool(['get']))
   console.log(`原始光标位置：(${original.x}, ${original.y})`)
+
+  // ★ 先写一个**已知的起始位置**，再启动应用。
+  //
+  // 为什么必须这么做（而不是读应用自己写的那份状态）：
+  // 这条测试要的是"窗口位移 == 光标位移"，而它必须知道拖动**开始那一刻**
+  // 窗口在哪。如果依赖 `window-state.json` 里已有的位置，就会受
+  // **别的验证脚本**影响——`verify:scale` 收尾时会把状态写成
+  // `{"scale": 2}`（位置被抹掉），于是这里启动后走的是
+  // `placeAtDefaultPosition()`，日志里没有「恢复保存的位置」可读。
+  //
+  // 本机就是因为"单跑通过、连着跑就失败"浪费过一轮排查。
+  // 测试之间不该有这种隐形依赖：自己把前提摆好，结果才可复现。
+  const stateDir = join(process.env.APPDATA ?? '', 'xiaoqi')
+  const statePath = join(stateDir, 'window-state.json')
+  const START = { x: 900, y: 400 }
+  mkdirSync(stateDir, { recursive: true })
+  // 缩放留 1：这条测试验证的是拖动，缩放另有 verify:scale 覆盖。
+  writeFileSync(statePath, JSON.stringify({ scale: 1, position: START }), 'utf8')
+  console.log(`已把起始位置设为 (${START.x}, ${START.y})，缩放 1×`)
   const logs = []
   const child = spawn(electronBinary(), ['.'], {
     cwd: process.cwd(),
@@ -234,9 +254,7 @@ async function main() {
     }
 
     // 位置持久化：写在 userData 下的 window-state.json
-    const { readFileSync } = await import('node:fs')
-    const { join: pjoin } = await import('node:path')
-    const statePath = pjoin(process.env.APPDATA ?? '', 'xiaoqi', 'window-state.json')
+    // （`statePath` 与 `readFileSync` 都在上面为"设置起始位置"导入过了）
     let saved = null
     try {
       saved = JSON.parse(readFileSync(statePath, 'utf8'))

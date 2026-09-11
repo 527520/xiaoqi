@@ -1,6 +1,6 @@
 [xiaoqi] [状态] +0s
 [xiaoqi]    前台进程：msedge.exe  →  类别：浏览器
-[xiaoqi]    空闲时长：90s
+[xiaoqi]    空闲时长：2s
 [xiaoqi]    系统状态：QUNS=5
 [xiaoqi]    工作模式：weekend（周末）
 [xiaoqi]    情绪：calm
@@ -11,7 +11,7 @@
 [xiaoqi]    pet 页面已开始执行
 [xiaoqi] [状态] +4s
 [xiaoqi]    前台进程：msedge.exe  →  类别：浏览器
-[xiaoqi]    空闲时长：94s
+[xiaoqi]    空闲时长：6s
 [xiaoqi]    系统状态：QUNS=5
 [xiaoqi]    工作模式：weekend（周末）
 [xiaoqi]    情绪：happy
