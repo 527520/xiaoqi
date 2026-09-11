@@ -122,6 +122,16 @@ export function usePetStage(
         window.xiaoqi.notifyAnimating(isAnimating)
       })
       stage.setScale(scale)
+      // 拖动：按下时把光标相对宠物左上角的偏移交给主进程，
+      // 之后由主进程按偏移跟随光标（渲染进程拿不到轮廓外的鼠标事件）。
+      stage.onDrag({
+        start: (offset) => {
+          window.xiaoqi.startDrag(offset)
+        },
+        end: () => {
+          window.xiaoqi.endDrag()
+        },
+      })
       stageRef.current = stage
 
       // 诊断出口：把舞台内部状态挂到 window 上（只读投影，不改变行为）。

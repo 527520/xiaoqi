@@ -13,6 +13,7 @@ import { selfCheckPlatform } from './platform'
 import { win32Platform } from './platform/win32'
 import { createPetWindow, resolveRendererEntry, trayIconPath } from './window/createPetWindow'
 import { PetWindowController } from './window/petWindow'
+import { loadWindowState, savePosition, saveScale } from './window/windowState'
 
 /**
  * ════════════════════════════════════════════════════════════════════════════
@@ -237,8 +238,21 @@ function registerIpc(): void {
     }
     log(`渲染进程请求缩放 → ${String(scale)}`)
     controller?.setScale(scale)
+    saveScale(scale)
     refreshTrayMenu()
     return runtimeState()
+  })
+
+  // 拖动：渲染进程按下时给一个光标相对窗口的偏移，主进程按它跟随光标。
+  ipcMain.on(IPC.dragStart, (_event, offset: unknown) => {
+    const o = offset as { x?: unknown; y?: unknown } | undefined
+    if (!o || typeof o.x !== 'number' || typeof o.y !== 'number') return
+    if (!Number.isFinite(o.x) || !Number.isFinite(o.y)) return
+    controller?.beginDrag({ x: o.x, y: o.y })
+  })
+
+  ipcMain.on(IPC.dragEnd, () => {
+    controller?.endDrag()
   })
 
   ipcMain.on(IPC.petInteract, () => {
@@ -302,7 +316,13 @@ function bootstrap(): void {
   //    而报错会出现在渲染进程里一个看起来无关的地方。
   const preloadPath = join(__dirname, '../preload/index.cjs')
 
-  petWindow = createPetWindow({ preloadPath, scale: PET_SCALE_DEFAULT })
+  // 恢复上次的缩放与位置。
+  // 顺序很重要：**先缩放再定位**——窗口尺寸变了以后，保存的左上角坐标
+  // 对应的可见区域也会变；先定尺寸再放位置，结果才与用户上次看到的一致。
+  const saved = loadWindowState()
+  const startScale = saved.scale ?? PET_SCALE_DEFAULT
+
+  petWindow = createPetWindow({ preloadPath, scale: startScale })
   controller = new PetWindowController({
     window: petWindow,
     platform: win32Platform,
@@ -310,7 +330,17 @@ function bootstrap(): void {
     logger: log,
   })
 
-  controller.placeAtDefaultPosition()
+  controller.setScale(startScale)
+  // 位置校验失败（例如拔了副屏）会自动退回默认位置。
+  if (!saved.position || !controller.restorePosition(saved.position)) {
+    controller.placeAtDefaultPosition()
+  }
+
+  // 拖动结束 → 持久化位置。放在这里而不是控制器内部，
+  // 是为了让"窗口控制器"保持不碰文件系统的职责边界。
+  controller.onDragEnd((position) => {
+    savePosition(position)
+  })
 
   const entry = resolveRendererEntry()
   if (entry.url) {

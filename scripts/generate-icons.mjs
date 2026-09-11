@@ -405,9 +405,7 @@ function assertGeometryInSync() {
   if (!designSizeMatch) {
     problems.push('constants.ts 里找不到 PET_DESIGN_SIZE 的值')
   } else if (Number(designSizeMatch[1]) !== DESIGN_SIZE) {
-    problems.push(
-      `PET_DESIGN_SIZE 是 ${designSizeMatch[1]}，本脚本按 ${DESIGN_SIZE} 绘制`,
-    )
+    problems.push(`PET_DESIGN_SIZE 是 ${designSizeMatch[1]}，本脚本按 ${DESIGN_SIZE} 绘制`)
   }
 
   if (problems.length > 0) {

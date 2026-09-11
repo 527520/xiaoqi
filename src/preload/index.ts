@@ -23,6 +23,14 @@ const bridge: XiaoqiBridge = {
 
   setScale: (scale: number) => ipcRenderer.invoke(IPC.scaleSet, scale) as Promise<PetRuntimeState>,
 
+  startDrag: (offset) => {
+    ipcRenderer.send(IPC.dragStart, offset)
+  },
+
+  endDrag: () => {
+    ipcRenderer.send(IPC.dragEnd)
+  },
+
   notifyInteraction: () => {
     ipcRenderer.send(IPC.petInteract)
   },

@@ -25,6 +25,7 @@
     "test:watch": "vitest",
     "verify:clickthrough": "node scripts/verify-clickthrough.mjs",
     "verify:scale": "node scripts/verify-scale.mjs",
+    "verify:drag": "node scripts/verify-drag.mjs",
     "icons": "node scripts/generate-icons.mjs",
     "dist": "electron-vite build && electron-builder --win --config electron-builder.yml"
   },

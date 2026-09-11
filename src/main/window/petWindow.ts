@@ -58,6 +58,16 @@ export class PetWindowController {
   #scale = 1
   /** 上一次广播出去的光标位置，用来避免重复推送同样的值。 */
   #lastBroadcastCursor: Point | null = null
+  /**
+   * 拖动中的光标偏移（光标相对窗口左上角，DIP）。`null` = 没在拖。
+   *
+   * 放在主进程而不是渲染进程，是因为拖动期间光标常常**移出宠物轮廓**
+   * （用户只是在拖），那时鼠标事件会穿透出去、渲染进程根本收不到。
+   * 主进程本来就在每 80ms 轮询光标，用它跟随最直接也最平滑。
+   */
+  #dragOffset: Point | null = null
+  /** 拖动结束时的持久化回调（由主进程注入；这个类不碰文件系统）。 */
+  #onDragEnd: ((position: Point) => void) | null = null
 
   #cursorTimer: NodeJS.Timeout | null = null
   #qunsTimer: NodeJS.Timeout | null = null
@@ -106,6 +116,58 @@ export class PetWindowController {
   /** 当前缩放倍数。 */
   get scale(): number {
     return this.#scale
+  }
+
+  /**
+   * 开始拖动。`offset` 是光标相对窗口左上角的偏移（DIP）。
+   *
+   * 拖动期间刻意**不再翻转穿透状态**：一旦光标移出宠物轮廓，
+   * 若照旧翻成 `passthrough`，窗口就会松手——用户感觉是"拖到一半掉了"。
+   * 直到 `endDrag()` 才恢复正常的穿透判定。
+   */
+  beginDrag(offset: Point): void {
+    if (this.#disposed) return
+    if (!Number.isFinite(offset.x) || !Number.isFinite(offset.y)) return
+    this.#dragOffset = offset
+    // 拖动期间窗口必须持续接收鼠标事件，否则松手
+    this.#cursorRoute = 'pet'
+    this.#window.setIgnoreMouseEvents(false)
+    this.#log(`开始拖动（偏移 ${String(Math.round(offset.x))},${String(Math.round(offset.y))}）`)
+  }
+
+  /**
+   * 结束拖动：恢复穿透判定，并把位置**持久化**。
+   *
+   * 持久化由外部注入的回调完成（主进程负责读写配置文件）——
+   * 这个类不碰文件系统，保持"只管窗口"的职责边界。
+   */
+  endDrag(): void {
+    if (this.#disposed) return
+    if (!this.#dragOffset) return
+    this.#dragOffset = null
+
+    const b = this.bounds()
+    const position = { x: b.x, y: b.y }
+    this.#log(`结束拖动 → (${String(position.x)},${String(position.y)})`)
+
+    this.#onDragEnd?.(position)
+
+    // 松手后立刻按当前光标重新判定一次穿透，避免出现"拖着的时候是 pet、
+    // 松手后如果不再动鼠标就一直保持 pet"的残留状态。
+    this.#cursorRoute = 'passthrough'
+    this.#window.setIgnoreMouseEvents(true)
+    this.#tickCursor()
+    this.#onStateChanged()
+  }
+
+  /** 外部注入：拖动结束时把位置交给它持久化。 */
+  onDragEnd(callback: (position: Point) => void): void {
+    this.#onDragEnd = callback
+  }
+
+  /** 当前是否正在被拖动（调试面板与测试用）。 */
+  get isDragging(): boolean {
+    return this.#dragOffset !== null
   }
 
   /**
@@ -295,6 +357,18 @@ export class PetWindowController {
           `窗口 ${String(bounds.x)},${String(bounds.y)} ${String(bounds.width)}×${String(bounds.height)}；` +
           `形态 ${this.mode}）`,
       )
+    }
+
+    // 拖动：按记录的光标偏移跟随。
+    // 这一步放在穿透判定**之后**，因为拖动期间我们并不改穿透状态——
+    // 松手前窗口一直保持接收鼠标事件，否则用户拖到一半就"掉手"了。
+    if (this.#dragOffset) {
+      this.#window.setBounds({
+        x: Math.round(point.x - this.#dragOffset.x),
+        y: Math.round(point.y - this.#dragOffset.y),
+        width: bounds.width,
+        height: bounds.height,
+      })
     }
 
     // ⚠️ 光标位置也要触发广播，而且**不能**只依赖上面那个"路由翻转"分支。
@@ -512,5 +586,55 @@ export class PetWindowController {
       width: size.width,
       height: size.height,
     })
+  }
+
+  /**
+   * 恢复上次保存的位置。
+   *
+   * ⚠️ **必须校验目标位置仍然落在某块显示器上**，否则：
+   * - 用户拔掉副屏后，宠物会被放到已经不存在的坐标上 → 它彻底消失，
+   *   而用户完全不知道为什么（这正是调研里 openai/codex #21508 的形态）。
+   * - 分辨率变小后同理。
+   *
+   * 校验方式是**与当前所有显示器的工作区求交**：窗口至少要有一部分可见。
+   * 不在任何显示器上就退回默认位置，并记一行日志说明原因。
+   *
+   * 返回是否采用了保存的位置。
+   */
+  restorePosition(position: Point): boolean {
+    if (this.#disposed) return false
+    if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) return false
+
+    const size = petWindowSize(this.#scale)
+    const candidate = {
+      x: Math.round(position.x),
+      y: Math.round(position.y),
+      width: size.width,
+      height: size.height,
+    }
+
+    // 与任一显示器工作区有交集即算"可见"。刻意不用"完全包含"：
+    // 用户把宠物拖到屏幕边缘、露一半，也是一种合法的摆放。
+    const visible = screen.getAllDisplays().some((display) => {
+      const a = display.workArea
+      return (
+        candidate.x < a.x + a.width &&
+        candidate.x + candidate.width > a.x &&
+        candidate.y < a.y + a.height &&
+        candidate.y + candidate.height > a.y
+      )
+    })
+
+    if (!visible) {
+      this.#log(
+        `保存的位置 (${String(candidate.x)},${String(candidate.y)}) 不在任何显示器上，` +
+          `改用默认位置（多半是拔了副屏或改了分辨率）`,
+      )
+      return false
+    }
+
+    this.#window.setBounds(candidate)
+    this.#log(`恢复保存的位置 (${String(candidate.x)},${String(candidate.y)})`)
+    return true
   }
 }

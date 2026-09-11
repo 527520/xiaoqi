@@ -23,6 +23,19 @@ export const IPC = {
    * 「托盘菜单点一下」没法自动点，但这条 invoke 可以。
    */
   scaleSet: 'scale:set',
+  /**
+   * 让宠物**跟着光标走**（拖动）。
+   *
+   * 为什么是主进程算位置而不是渲染进程给坐标：
+   * 拖动期间光标常常**移出宠物轮廓**（用户只是在拖），
+   * 而透明区域一律穿透，渲染进程根本收不到那些 move 事件。
+   * 主进程本来就在每 80ms 轮询光标，用它算窗口位置最直接也最平滑。
+   *
+   * `dragStart` 带一个光标相对窗口原点的偏移，之后主进程按这个偏移跟随；
+   * `dragEnd` 结束拖动并持久化位置。
+   */
+  dragStart: 'drag:start',
+  dragEnd: 'drag:end',
   /** 渲染进程报告"用户点了宠物"，用于帧率预算（send，单向）。 */
   petInteract: 'pet:interact',
   /** 渲染进程报告交互动画结束（send，单向）。 */
@@ -64,6 +77,13 @@ export interface XiaoqiBridge {
   setMode(mode: VisibilityMode): Promise<PetRuntimeState>
   /** 设置宠物缩放。返回应用后的新快照。 */
   setScale(scale: number): Promise<PetRuntimeState>
+  /**
+   * 开始拖动：`offset` 是光标相对宠物窗口左上角的偏移（DIP）。
+   * 之后主进程按这个偏移跟随光标，直到 `endDrag()`。
+   */
+  startDrag(offset: { x: number; y: number }): void
+  /** 结束拖动（松手）。主进程会持久化位置。 */
+  endDrag(): void
   /** 报告用户点了宠物。 */
   notifyInteraction(): void
   /** 报告交互动画开始/结束，用于帧率降档。 */

@@ -97,6 +97,13 @@ export class PetStage {
   /** 动画状态回调（通知主进程调整帧率预算）。 */
   #animationCallback: ((isAnimating: boolean) => void) | null = null
 
+  /** 拖动回调（由 `onDrag` 注入）。 */
+  #dragStart: ((offset: { x: number; y: number }) => void) | null = null
+  #dragEnd: (() => void) | null = null
+  /** 本次按下的起点（用于区分"点击"与"拖动"）。`null` = 没按住。 */
+  #pressStart: { x: number; y: number } | null = null
+  #dragging = false
+
   /** 形态。由外部按主进程推送的状态设置。 */
   mode: 'active' | 'silent' | 'hidden' = 'active'
 
@@ -140,10 +147,45 @@ export class PetStage {
         return inEllipse || inCircle(dl) || inCircle(dr) || inCircle(dt)
       },
     }
-    app.stage.on('pointerdown', () => {
-      this.#trigger()
-      this.#onInteract()
+    app.stage.on('pointerdown', (event) => {
+      // 记录按下位置：松手时若几乎没移动，就当作"拍了一下"（互动）；
+      // 移动超过阈值才算拖动。不做这个区分的话，用户每次点宠物都会
+      // 因指针的微小抖动把它挪动一两像素——很恼人。
+      this.#pressStart = { x: event.global.x, y: event.global.y }
+      this.#dragging = false
+      // 立即进入拖动模式：主进程会在这段时间里保持接收鼠标事件，
+      // 否则光标一移出宠物轮廓，窗口就"松手"了。
+      this.#dragStart?.({ x: event.global.x / this.#scale, y: event.global.y / this.#scale })
     })
+
+    app.stage.on('pointermove', (event) => {
+      if (!this.#pressStart) return
+      const dx = event.global.x - this.#pressStart.x
+      const dy = event.global.y - this.#pressStart.y
+      // 阈值 4px：低于它算手抖，不算拖动。
+      if (!this.#dragging && Math.hypot(dx, dy) >= 4) this.#dragging = true
+    })
+
+    const endPress = (): void => {
+      if (!this.#pressStart) return
+      const wasDragging = this.#dragging
+      this.#pressStart = null
+      this.#dragging = false
+      this.#dragEnd?.()
+      // 只有"没在拖"才算被拍了一下——否则每次拖完都会触发一次互动反应。
+      if (!wasDragging) {
+        this.#trigger()
+        this.#onInteract()
+      }
+    }
+    app.stage.on('pointerup', endPress)
+    app.stage.on('pointerupoutside', endPress)
+  }
+
+  /** 接上拖动回调（由 `usePetStage` 连到 IPC）。 */
+  onDrag(handlers: { start: (offset: { x: number; y: number }) => void; end: () => void }): void {
+    this.#dragStart = handlers.start
+    this.#dragEnd = handlers.end
   }
 
   onAnimationStateChange(callback: (isAnimating: boolean) => void): void {
