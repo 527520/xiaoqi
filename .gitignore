@@ -51,3 +51,17 @@ coverage/
 .nyc_output/
 playwright-report/
 test-results/
+
+# 开发期诊断产物
+#
+# `docs/evidence/` 下的**证据**（PNG 截图、clickthrough.log）是要提交的：
+# 它们是 `docs/verify-m1.md` 里结论的凭据，删掉就等于结论没有支撑。
+# 但每次跑应用都会产生一份运行日志，那个不该进仓库——
+# 所以运行期日志统一落到 `runtime/` 子目录并被忽略。
+docs/evidence/runtime/
+docs/evidence/probe/
+
+# 上面第 13 行的 `*.log` 会把证据日志也一起忽略掉，这里显式放行。
+# 注意顺序：`.gitignore` 的否定规则必须排在忽略规则**之后**才生效。
+!docs/evidence/clickthrough.log
+

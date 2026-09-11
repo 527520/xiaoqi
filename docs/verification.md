@@ -135,3 +135,60 @@ Win10/11 窗口有不可见的调整边框。**任何拿 `GetWindowRect` 做像�
 - **`window-all-closed` 会提前杀掉验证流程**：诊断脚本销毁窗口时该事件入队，导致后续检查永远跑不到。验证程序**不要注册**这个处理器，生命周期由显式 `app.exit()` 控制。
 - **pnpm 10+ 默认阻止依赖构建脚本**，会报 `ERR_PNPM_IGNORED_BUILDS`。本项目所有原生依赖都自带预编译，**脚本本就不该跑**——用 `pnpm.onlyBuiltDependencies: []` 显式禁掉即可，不要为此安装编译器。
 - **pnpm 12 不遵守 `shamefully-hoist`**，`require('better-sqlite3/package.json')` 在严格 node_modules 下可能失败；本项目直接依赖了它所以能解析，若改成仅传递依赖需注意。
+
+---
+
+# M0 复跑复核（增量，不覆盖以上结论）
+
+**复跑日期**：2026-09-11（同一天，环境未变）
+**目的**：确认环境未变，作为开工前的基线。
+**命令**：`cd verify; pnpm install; pnpm verify`
+
+## 结果：与上文结论一致，**0 失败**
+
+不加取证开关的第一次复跑：`INFO=18 WARN=6 PASS=26`。
+加上 `XIAOQI_CHECK_CAPTURE=1`（捕获取证）后：**`INFO=19 WARN=5 PASS=28`，无失败项**。
+
+两次的 WARN 数差 1，原因就是"捕获取证未启用"那一条本身——
+启用后它变成一条 PASS（"开启保护后洋红块从捕获中消失"），于是
+**待确认项正好收敛为上文记录的 5 项**。因此复跑结论与本文记录的
+「27 通过 / 0 失败 / 5 待确认」逐项吻合（PASS 计数的 1 项差异来自
+本次额外启用了一项取证，不是环境变化）。
+
+关键项复跑值：
+
+| 项 | 本次实测 |
+|---|---|
+| `better-sqlite3` | 13.0.3 加载、读写、FTS5 中文子串检索均通过 |
+| `koffi` | 3.2.1 |
+| `SHQueryUserNotificationState` | `hr=0 state=5` |
+| `GetLastInputInfo` | `ok=true cbSize=8`；负向对照（`cbSize=4`）返回 false |
+| 前台进程名 | `msedge` → 场景"浏览" |
+| 场景识别表 | 10 类 / 163 进程名，自检 163/163 |
+| `GetWindowRect` 比真实边界大 | 16px（陷阱仍在） |
+| QUNS 全屏跳变 | 全屏期间 `state ∈ {2}`，退出后回到 `5` |
+| 捕获取证（V5） | 未保护时洋红块可见；**开启保护后从捕获中消失** |
+
+## M0 阶段新增的环境事实（施工中发现，补充记录）
+
+以下是**复跑之外**、搭建工程骨架时实测到的新事实，供后续参考：
+
+1. **pnpm 12.3.4 已不再读取 `package.json` 里的 `pnpm` 字段**。
+   安装时它会自动生成一个 `pnpm-workspace.yaml`，其中的 `allowBuilds`
+   才是"允许哪些依赖跑构建脚本"的唯一配置位置。施工令 §3 提到的
+   `pnpm.onlyBuiltDependencies: []` 写法在本机**已被忽略**（会有 WARN 明说）。
+2. **`koffi` 的 install 脚本确实可以安全忽略**。它的 install 走
+   `cnoke --prebuild`，而平台二进制由 `optionalDependencies`
+   （`@koromix/koffi-win32-x64`）提供。实测配成 `koffi: false` 之后，
+   `require('koffi')` 与 Win32 调用都正常——`verify/` 一直就是这么配的。
+   因此**需要放行构建脚本的只有 `esbuild`**（它的 postinstall 只是把预编译二进制放到位）。
+3. **类型工具链存在硬性版本边界（很容易踩）**：
+   - `typescript-eslint@8.70` 的 peer 是 `typescript >=4.8.4 <6.1.0`，
+     所以 **TypeScript 7.0.2 不可用**（npm 上的 latest 已经是 7）；本项目用 **6.0.3**。
+   - `electron-vite@5` 的 peer 是 `vite ^5||^6||^7`，因此不能用 vite 8；
+     而 `@vitejs/plugin-react@6` 又要求 vite 8。两者的交集是
+     **vite 7.3.6 + @vitejs/plugin-react 5.2.0**。
+   - `electron-vite@5` 声明 `@swc/core` 为 peer，但它是可选的，不需要安装。
+4. **TypeScript 6 已废弃 `baseUrl`**，保留会直接报 `TS5101`；
+   只用 `paths`（相对 tsconfig 解析）即可，不必加 `ignoreDeprecations` 掩盖。
+

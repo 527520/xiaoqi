@@ -1,0 +1,24 @@
+# pnpm 12 起，"允许哪些依赖跑构建脚本" 的唯一配置位置是这里
+# （package.json 里的 `pnpm` 字段已不再被读取）。
+#
+# 本机没有任何 C++ 编译器，所以原则是：**能不跑构建脚本就不跑**。
+#
+# esbuild: true
+#   vite 的运行依赖。它的 postinstall 只是把对应平台的预编译二进制放到位，
+#   不涉及 C++ 编译，必须允许，否则 vite/vitest 直接不可用。
+#
+# koffi: false
+#   看起来该跑，其实不必。koffi 3.x 通过 optionalDependencies
+#   （@koromix/koffi-win32-x64）分发预编译二进制，install 脚本走 cnoke
+#   `--prebuild` 路径；即使被忽略，模块仍能正常 load。
+#   这一点由 verify/ 的实测背书：verify/pnpm-workspace.yaml 里
+#   `koffi: false`，而 V2 用例仍然成功加载了 koffi 3.2.1 并调用了 Win32。
+#   （若将来 koffi 升级后此法失效，症状会是 `require('koffi')` 直接抛错，
+#     那时把它改成 true 即可。）
+#
+# electron-winstaller: false
+#   只在打 Squirrel.Windows 包时用得上；本项目走 NSIS，不需要。
+allowBuilds:
+  esbuild: true
+  koffi: false
+  electron-winstaller: false

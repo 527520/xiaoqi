@@ -1,0 +1,104 @@
+#!/bin/sh
+#
+# pre-commit：扫描**暂存区**里是否含疑似密钥，命中则拒绝提交。
+#
+# 施工令 §6.4 的硬要求。做在 git hook 而不是 husky 里，是因为它零依赖、
+# 无法被 `npm ci` 的失败绕过，而且触发时机最靠前。
+#
+# 启用方式（已由仓库配置好，见 README 的"首次准备"）：
+#     git config core.hooksPath .githooks
+#
+# 设计取舍：**宁可误报，不可漏报**。密钥一旦进了 git 历史，
+# 清理成本远大于让开发者多看一眼。确实需要提交的假密钥请写进
+# 允许列表（下面的 ALLOWLIST），不要用 `--no-verify` 绕过——
+# 那会让这个 hook 对后续所有提交失效，而人是会忘记的。
+
+set -eu
+
+ALLOWLIST='(sk-xxxxxxxx|sk-\.\.\.|your-api-key|YOUR_KEY|example|placeholder|redacted|xxxx)'
+
+# 只在"新增行"里找（`+` 开头），避免因为历史里的东西反复报错。
+staged=$(git diff --cached --unified=0 --no-color -- . \
+  | grep -E '^\+' \
+  | grep -vE '^\+\+\+' \
+  || true)
+
+if [ -z "$staged" ]; then
+  exit 0
+fi
+
+status=0
+report() {
+  status=1
+  printf '\n✗ 疑似密钥：%s\n' "$1"
+  printf '%s\n' "$2" | sed 's/^/    /'
+}
+
+# ── 1. OpenAI 风格密钥 sk-... ──
+hits=$(printf '%s\n' "$staged" | grep -E 'sk-[A-Za-z0-9_-]{20,}' | grep -vE "$ALLOWLIST" || true)
+[ -n "$hits" ] && report "OpenAI 风格密钥（sk-…）" "$hits"
+
+# ── 2. GitHub token ──
+hits=$(printf '%s\n' "$staged" | grep -E '(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}' | grep -vE "$ALLOWLIST" || true)
+[ -n "$hits" ] && report "GitHub token（ghp_/gho_/…）" "$hits"
+
+hits=$(printf '%s\n' "$staged" | grep -E 'github_pat_[A-Za-z0-9_]{40,}' | grep -vE "$ALLOWLIST" || true)
+[ -n "$hits" ] && report "GitHub fine-grained PAT" "$hits"
+
+# ── 3. 其他常见服务的前缀 ──
+hits=$(printf '%s\n' "$staged" | grep -E '(AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35})' | grep -vE "$ALLOWLIST" || true)
+[ -n "$hits" ] && report "AWS / Slack / Google API 密钥" "$hits"
+
+# ── 4. 长得像 base64/密钥的长串（可能是密钥或被误提交的二进制） ──
+#
+# ⚠️ 这条规则最容易误报。踩过的坑（三次，都记在这里，别再踩）：
+#
+#   a) 中文是**多字节**字符，而中文全角标点（`：``，`）的 UTF-8 字节恰好落在
+#      `+` / `/` 的范围内，于是一整句中文说明会被匹配成"一段 base64"。
+#   b) 加"必须含大小写与数字"的限制**没用**——一整句中文里总有 ASCII 片段
+#      （URL、驼峰标识符），凑得出这个组合。
+#   c) 按**文件类型**排除（跳过 .md）也没用：只要有人把中文写进 .ts 注释，
+#      同样会命中。排除法是在追症状。
+#
+# 有效判据是 **"这一行必须整行都是 ASCII"**：
+#   - 真实的 base64 密钥所在行通常是纯 ASCII 的赋值；
+#   - 而任何含中文的行都必然有非 ASCII 字节，直接排除。
+# 用 `LC_ALL=C grep -v '[^ -~]'` 实现：C locale 下按字节看，
+# 非 ASCII 字节落在 ` -~`（0x20–0x7E）之外，因此被剔除。
+#
+# 阈值取 **32**，不是 64。原因：真实密钥（例如 32 字节随机数）base64 后是 44 个字符，
+# 根本到不了 64；而门槛设太高会出现"把假密钥种进去都检测不到"的自欺——
+# 本机的测试用例就是这么发现阈值定错的（56 字符的密钥漏过）。
+# 32 是"足够长以致不可能是普通标识符"与"足够短以致能覆盖真实密钥"的折中。
+hits=$(printf '%s\n' "$staged" \
+  | LC_ALL=C grep -v '[^ -~]' \
+  | grep -E '[A-Za-z0-9+/]{32,}={0,2}' \
+  | grep -E '[a-z]' | grep -E '[A-Z]' | grep -E '[0-9]' \
+  | grep -vE "$ALLOWLIST" \
+  | grep -vE '(base64|data:image|sha256-|sha512-|integrity)' \
+  || true)
+[ -n "$hits" ] && report "疑似长 base64/密钥串（≥32 字符，含大小写与数字）" "$hits"
+
+# ── 5. 明确的密钥赋值（key/secret/token/password = "..."） ──
+hits=$(printf '%s\n' "$staged" \
+  | grep -iE '(api[_-]?key|secret|access[_-]?token|password|passwd|private[_-]?key)\s*[:=]\s*["'"'"'][^"'"'"']{12,}' \
+  | grep -vE "$ALLOWLIST" \
+  | grep -vE '(process\.env|import\.meta\.env|getenv|os\.environ|\$\{|\.example)' \
+  || true)
+[ -n "$hits" ] && report "疑似硬编码的密钥赋值" "$hits"
+
+if [ "$status" -ne 0 ]; then
+  cat <<'EOF'
+
+提交已拒绝（施工令 §6.4）。
+
+如果这是误报：请把该字符串加入 .githooks/pre-commit 的 ALLOWLIST，
+改成一个明显的占位符，或把它移到 .env（已在 .gitignore 里）。
+
+请不要用 `git commit --no-verify` 绕过——密钥一旦进入 git 历史，
+清理成本远高于现在多看一眼。
+EOF
+  exit 1
+fi
+
+exit 0
