@@ -5,9 +5,11 @@ import { type BrowserWindow, Menu, Tray, app, globalShortcut, ipcMain, nativeIma
 import { describeUserNotificationState } from '@shared/geometry'
 import { PET_SCALE_DEFAULT, PET_SCALE_STEPS } from '@shared/constants'
 import { IPC } from '@shared/ipc'
-import type { PetRuntimeState, VisibilityMode } from '@shared/types'
+import type { DisturbLevel, PetRuntimeState, VisibilityMode } from '@shared/types'
 
+import { resolveDisturbLevel } from './core/disturbGate'
 import { targetFrameRate } from './core/frameRate'
+import { Perception, type PerceivedState } from './core/perception'
 import { evidenceDir, runEvidenceCapture, runResizeTest } from './evidence'
 import { selfCheckPlatform } from './platform'
 import { win32Platform } from './platform/win32'
@@ -55,6 +57,26 @@ let petWindow: BrowserWindow | null = null
 let controller: PetWindowController | null = null
 let tray: Tray | null = null
 
+/**
+ * 感知器：三项信号 → 工作模式 / 生理 / 情绪。
+ *
+ * 它在 M2 才被接进运行时。在此之前 `core/perception.ts` 只有测试在跑，
+ * 应用起来时并没有真的在采样。
+ */
+let perception: Perception | null = null
+
+/**
+ * 调试面板开关（施工令 §5 M2 要求「一个实时打印当前状态的调试面板，
+ * 开发期用，可被设置项关闭」）。
+ *
+ * 默认在开发期开启、打包后关闭；`XIAOQI_DEBUG_STATE=1/0` 可强制覆盖。
+ * 它打到**主进程日志**而不是屏幕上——因为我们刻意不去截屏或叠加窗口，
+ * 而日志既能被自动化验证读取，又不打扰用户。
+ */
+const DEBUG_STATE_ENABLED =
+  process.env.XIAOQI_DEBUG_STATE === '1' ||
+  (process.env.XIAOQI_DEBUG_STATE !== '0' && !app.isPackaged)
+
 /** 全局快捷键：一键隐身（防社死底线，施工令 §9.4）。 */
 const HIDE_ACCELERATOR = 'CommandOrControl+Shift+H'
 /** 恢复显示。用户被围观后需要能把它叫回来。 */
@@ -78,7 +100,82 @@ function runtimeState(): PetRuntimeState {
     scale: controller.scale,
     // 视线跟随用的光标位置（设计空间坐标）。够远时为 null，眼睛回正。
     cursor: controller.cursorInDesignSpace(),
+    // 只推**推断结果**，不推原始感知输入（进程名、空闲时长）。
+    // 渲染层只需要知道"该摆什么表情"，把原始信号推过去既无用又扩大暴露面。
+    workMode: perception?.snapshot?.workMode ?? 'rest',
+    emotion: perception?.snapshot?.emotion.emotion ?? 'calm',
+    disturbLevel: currentDisturbLevel(),
   }
+}
+
+/**
+ * 求当前打扰级别。
+ *
+ * M2 只把它算出来并展示（调试面板/渲染层），**还没有任何主动行为去消费它**
+ * ——表达层要等 M5。这样安排是有意的：先把"能不能打扰"的判定做对并可见，
+ * 等真正会说话的模块进来时，它只能走这个闸门。
+ */
+function currentDisturbLevel(): DisturbLevel {
+  const snapshot = perception?.snapshot
+  if (!snapshot || !controller) return 'silent'
+  return resolveDisturbLevel({
+    mode: snapshot.workMode,
+    notificationState: snapshot.notificationState,
+    // 主动度：M2 还没有用户配置，先用默认的"低"。
+    // 注意 0.15 低于两个门槛（0.6 / 0.75），因此**默认永远不主动**。
+    proactiveness: 0.15,
+    // 勿扰时段同样要等 M6 的配置界面；M2 先固定为"不在勿扰时段"。
+    inDoNotDisturbWindow: false,
+    visibility: controller.mode,
+  })
+}
+
+/**
+ * 调试面板的采样节流状态。
+ *
+ * ⚠️ 面板不能每拍都打一行。加完 `XIAOQI_PERCEPTION_INTERVAL_MS` 之后，
+ *    250ms 的取证节奏会产出**每秒约 4 行**状态日志——第一次跑就淹了整份日志，
+ *    真正有用的行（形态切换、错误）全被埋掉。
+ *    施工令 §9 的原则是"不打扰"，调试输出也不该例外。
+ *
+ * 现在的规则：**变化必打**（那才是有信息量的），平稳时每 30 秒打一次心跳。
+ * 这样"它在动"和"它卡住了"依然能区分，而日志量降到可读。
+ */
+const PANEL_HEARTBEAT_MS = 30_000
+let lastPanelKey = ''
+let lastPanelAt = 0
+
+/** 调试面板：把当前状态打一行到日志。 */
+function logPerceivedState(state: PerceivedState): void {
+  if (!DEBUG_STATE_ENABLED) return
+
+  const p = state.physiology
+  const level = currentDisturbLevel()
+  // "有意义的变化"：工作模式 / 情绪 / 打扰级别 / 前台进程。
+  // 生理量是连续变化的，不参与 key（否则每拍都算"变了"）。
+  const key = [
+    state.processName ?? '?',
+    state.workMode,
+    state.emotion.emotion,
+    level,
+    String(state.notificationState),
+  ].join('|')
+
+  const now = Date.now()
+  const changed = key !== lastPanelKey
+  if (!changed && now - lastPanelAt < PANEL_HEARTBEAT_MS) return
+  lastPanelKey = key
+  lastPanelAt = now
+
+  // 保留一位小数：生理量每小时只变几个百分点，整数会把变化抹平，
+  // 让"它在动"与"它卡住了"看起来一样。
+  const pct = (v: number): string => `${(v * 100).toFixed(1)}%`
+  log(
+    `[状态]${changed ? '' : '（心跳）'} +${String(Math.round(state.uptimeMs / 1000))}s ` +
+      `${state.processName ?? '（拿不到进程）'} → ${state.workMode}｜情绪 ${state.emotion.emotion}｜` +
+      `打扰 ${level}｜精力 ${pct(p.energy)} 饥饿 ${pct(p.hunger)} 无聊 ${pct(p.boredom)} 社交 ${pct(p.social)}｜` +
+      `空闲 ${state.idleMs === null ? '?' : String(Math.round(state.idleMs / 1000))}s｜QUNS=${String(state.notificationState)}`,
+  )
 }
 
 function broadcastState(): void {
@@ -257,7 +354,13 @@ function registerIpc(): void {
 
   ipcMain.on(IPC.petInteract, () => {
     log('用户点了宠物')
-    // M1 没有业务逻辑：这里只记录互动。M2 起接入状态机。
+    // 「无条件回应」（ADR-0003）的落地：**用户一伸手就必有反应**，
+    // 与形态、打扰级别、工作模式、是否"被冷落"全都无关。
+    // 这里做两件事：
+    //   ① 记一次互动 → 影响生理（社交欲回落）；
+    //   ② 闪一下"惊讶/被注意到"的表情 → 立即可见的回应。
+    perception?.noteInteraction()
+    perception?.flashEmotion('surprised')
   })
 
   ipcMain.on(IPC.petAnimating, (_event, isAnimating: unknown) => {
@@ -341,6 +444,27 @@ function bootstrap(): void {
   controller.onDragEnd((position) => {
     savePosition(position)
   })
+
+  // ── 感知 ──
+  //
+  // 它在主进程里跑、以 2 秒一拍读三项信号。刻意**低频**：
+  // 工作模式的变化是分钟级的，而施工令 §4.3⑩ 明确「耗电是隐形差评源」。
+  //
+  // `XIAOQI_PERCEPTION_INTERVAL_MS` 只给取证用：生理量每小时只变几个百分点，
+  // 用默认 2 秒间隔在短时间窗里根本看不出它在动。生产不要设这个变量。
+  const intervalOverride = Number(process.env.XIAOQI_PERCEPTION_INTERVAL_MS)
+  perception = new Perception({
+    platform: win32Platform,
+    onState: (state) => {
+      logPerceivedState(state)
+      // 推断结果变了就推给渲染层（它按情绪摆表情、按打扰级别决定要不要冒泡）。
+      broadcastState()
+    },
+    ...(Number.isFinite(intervalOverride) && intervalOverride > 0
+      ? { intervalMs: intervalOverride }
+      : {}),
+  })
+  perception.start()
 
   const entry = resolveRendererEntry()
   if (entry.url) {
@@ -465,8 +589,10 @@ if (!gotLock) {
 
 app.on('will-quit', () => {
   isQuitting = true
-  // 退出顺序与启动严格逆序：先注销全局快捷键，再停轮询，最后销毁托盘与窗口。
+  // 退出顺序与启动严格逆序：先注销全局快捷键，再停感知与轮询，最后销毁托盘与窗口。
   globalShortcut.unregisterAll()
+  perception?.dispose()
+  perception = null
   controller?.dispose()
   tray?.destroy()
   tray = null

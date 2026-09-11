@@ -49,6 +49,14 @@ export interface PerceivedState {
   readonly sameCategoryMs: number
   /** 上一次真正读到信号的时刻（毫秒）。 */
   readonly sampledAt: number
+  /**
+   * 感知器已经运行了多久（毫秒）。
+   *
+   * 单列出来是为了让调试面板**可核对**：生理量每小时只变几个百分点，
+   * 只显示百分比的话，"它在动"与"它卡住了"看起来一模一样
+   * （本机第一次跑调试面板时就没法判断——20 秒内所有数字都没变）。
+   */
+  readonly uptimeMs: number
 }
 
 export interface PerceptionOptions {
@@ -57,6 +65,15 @@ export interface PerceptionOptions {
   readonly onState?: (state: PerceivedState) => void
   /** 时钟注入，便于单测。默认 `Date.now`。 */
   readonly now?: () => number
+  /**
+   * 轮询间隔（毫秒），默认 `QUNS_POLL_INTERVAL_MS`（2000）。
+   *
+   * ⚠️ 只给测试与取证用。生产路径**不要**传它，更不要把默认值调小：
+   * 2 秒是"够灵敏 + 省电"的折中（见文件头注释）。测试里传小值是为了
+   * 在几秒内观察到生理量的变化——生理量每小时只变几个百分点，
+   * 用 2 秒间隔根本看不出它在动。
+   */
+  readonly intervalMs?: number
 }
 
 /**
@@ -71,6 +88,7 @@ export class Perception {
   readonly #platform: Platform
   readonly #onState: ((state: PerceivedState) => void) | null
   readonly #now: () => number
+  readonly #intervalMs: number
 
   #timer: NodeJS.Timeout | null = null
   #disposed = false
@@ -80,6 +98,7 @@ export class Perception {
   #category: AppCategory = 'unknown'
   #sameCategorySince = 0
   #lastStepAt = 0
+  #startedAt = 0
   #hadInteraction = false
   #snapshot: PerceivedState | null = null
 
@@ -87,6 +106,7 @@ export class Perception {
     this.#platform = options.platform
     this.#onState = options.onState ?? null
     this.#now = options.now ?? Date.now
+    this.#intervalMs = options.intervalMs ?? QUNS_POLL_INTERVAL_MS
 
     // ⚠️ 时间基准必须在**构造时**初始化，不能等到 `start()`。
     //
@@ -101,6 +121,7 @@ export class Perception {
     const now = this.#now()
     this.#lastStepAt = now
     this.#sameCategorySince = now
+    this.#startedAt = now
     this.#emotion = { emotion: 'calm', since: now }
   }
 
@@ -113,7 +134,7 @@ export class Perception {
     this.tick()
     this.#timer = setInterval(() => {
       this.tick()
-    }, QUNS_POLL_INTERVAL_MS)
+    }, this.#intervalMs)
   }
 
   dispose(): void {
@@ -184,6 +205,7 @@ export class Perception {
       physiology: this.#physiology,
       sameCategoryMs,
       sampledAt: now,
+      uptimeMs: now - this.#startedAt,
     }
     this.#snapshot = state
     this.#onState?.(state)
@@ -224,6 +246,7 @@ export class Perception {
         s.physiology.boredom,
       )} / 社交 ${pct(s.physiology.social)}`,
       `同类工具连续：${String(Math.round(s.sameCategoryMs / 1000))}s`,
+      `已运行：${String(Math.round(s.uptimeMs / 1000))}s`,
     ]
   }
 }

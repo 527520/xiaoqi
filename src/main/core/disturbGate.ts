@@ -1,4 +1,4 @@
-import type { UserNotificationState, WorkMode } from '@shared/types'
+import type { DisturbLevel, UserNotificationState, WorkMode } from '@shared/types'
 
 /**
  * 打扰闸门 —— 决定宠物**现在允许主动做什么**。
@@ -14,22 +14,12 @@ import type { UserNotificationState, WorkMode } from '@shared/types'
  * 而用户正常写代码时形态是"正常"、打扰级别也只是"低"——能回应，但不主动。
  *
  * 纯函数，可单测。
- */
-
-/**
- * 打扰级别。从小到大。
  *
- * `silent` 与 `low` 的区别很重要：
- * - `low`：**可以回应**用户（他伸手了），但**不主动**发起。
- * - `silent`：连回应都压到最低限度（只做最小可见反馈），不冒泡、不出声。
+ * ⚠️ `DisturbLevel` 的类型定义放在 `shared/types.ts`（渲染层也要用它）。
+ *    这里只 re-export，避免两处各写一份而漂移——那正是本项目反复强调的
+ *    "单一真相源"。
  */
-export type DisturbLevel =
-  /** 完全不主动，且回应压到最小（全屏、锁屏、勿扰时段） */
-  | 'silent'
-  /** 只回应、不主动（默认） */
-  | 'low'
-  /** 可以偶尔主动（用户明确调高了主动度，且当前语境合适） */
-  | 'normal'
+export type { DisturbLevel }
 
 export interface DisturbGateInput {
   readonly mode: WorkMode

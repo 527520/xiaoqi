@@ -113,6 +113,18 @@ export type Emotion =
   | 'bored'
 
 /**
+ * 打扰级别：宠物现在允许**主动**做什么（施工令 §9 写进代码）。
+ *
+ * - `silent`：完全不主动，回应也压到最小（全屏、锁屏、勿扰时段）
+ * - `low`：可以**回应**用户，但不主动发起（默认）
+ * - `normal`：可以偶尔主动（需要用户把主动度调到阈值以上）
+ *
+ * ⚠️ 它**不影响"要不要回应"**：那条是 `mustRespond()` 管的，几乎恒为 true
+ *    （ADR-0003 的无条件回应）。两个概念不要混。
+ */
+export type DisturbLevel = 'silent' | 'low' | 'normal'
+
+/**
  * 点击穿透的路由决策。
  *
  * `'pet'`   → 光标在宠物轮廓内，窗口必须接收鼠标事件（宠物可点）。
@@ -157,4 +169,19 @@ export interface PetRuntimeState {
    * 所以这不会变成一条持续的心跳流量。
    */
   readonly cursor: Point | null
+  /**
+   * 当前推断出的工作模式（用户的处境）与情绪（宠物自己的状态）。
+   *
+   * ⚠️ 这里**只放推断结果**，不放任何原始感知输入：
+   *    渲染进程拿不到进程名、空闲时长这些东西，它只需要知道
+   *    "现在该摆什么表情"。把原始信号也推过去既没有用处，
+   *    又白白扩大了信息暴露面。
+   */
+  readonly workMode: WorkMode
+  readonly emotion: Emotion
+  /**
+   * 打扰级别：宠物现在允许**主动**做什么。
+   * 渲染层据此决定要不要冒泡/出声（`silent` 与 `low` 都不主动）。
+   */
+  readonly disturbLevel: DisturbLevel
 }
