@@ -12,6 +12,7 @@ import { resolveDisturbLevel } from './core/disturbGate'
 import { targetFrameRate } from './core/frameRate'
 import { Perception, type PerceivedState } from './core/perception'
 import { evidenceDir, runEvidenceCapture, runResizeTest } from './evidence'
+import { MemoryService } from './memory/service'
 import { selfCheckPlatform } from './platform'
 import { win32Platform } from './platform/win32'
 import { createPetWindow, resolveRendererEntry, trayIconPath } from './window/createPetWindow'
@@ -77,6 +78,25 @@ let perception: Perception | null = null
 const DEBUG_STATE_ENABLED =
   process.env.XIAOQI_DEBUG_STATE === '1' ||
   (process.env.XIAOQI_DEBUG_STATE !== '0' && !app.isPackaged)
+
+/**
+ * 记忆（M3）。
+ *
+ * 它在 `bootstrap()` 里被创建。若数据库打不开，`MemoryService` 会自己降级成
+ * 空实现并记一行诊断——**记忆不可用不该让宠物起不来**。
+ */
+let memory: MemoryService | null = null
+
+/**
+ * 记忆数据库路径。与 `window-state.json` 同目录（`%APPDATA%\xiaoqi`）。
+ *
+ * 用 `userData` 而不是自拼 `%APPDATA%`：路径随平台与打包形态变化，
+ * Electron 已经把这件事算对了。
+ * `XIAOQI_MEMORY_DB` 可覆盖，供验证脚本指向临时库。
+ */
+function memoryDbPath(): string {
+  return process.env.XIAOQI_MEMORY_DB ?? join(app.getPath('userData'), 'memory.db')
+}
 
 /** 全局快捷键：一键隐身（防社死底线，施工令 §9.4）。 */
 const HIDE_ACCELERATOR = 'CommandOrControl+Shift+H'
@@ -348,11 +368,13 @@ function registerIpc(): void {
     log('用户点了宠物')
     // 「无条件回应」（ADR-0003）的落地：**用户一伸手就必有反应**，
     // 与形态、打扰级别、工作模式、是否"被冷落"全都无关。
-    // 这里做两件事：
+    // 这里做三件事：
     //   ① 记一次互动 → 影响生理（社交欲回落）；
-    //   ② 闪一下"惊讶/被注意到"的表情 → 立即可见的回应。
+    //   ② 闪一下"惊讶/被注意到"的表情 → 立即可见的回应；
+    //   ③ 记进记忆 → 这是情景记忆唯一的来源（M3）。
     perception?.noteInteraction()
     perception?.flashEmotion('surprised')
+    recordInteractionMemory()
   })
 
   ipcMain.on(IPC.petAnimating, (_event, isAnimating: unknown) => {
@@ -368,6 +390,28 @@ function registerIpc(): void {
     }
     event.returnValue = null
   })
+}
+
+/**
+ * 把一次互动记成情景记忆（M3）。
+ *
+ * ── 为什么标签用**工作模式** ──
+ *
+ * `promote.ts` 用标签做聚类键，所以标签要能代表"这是哪一类事"。
+ * 工作模式（加班 / 编码 / 会议 / 周末 …）正好是这样一个维度：
+ * 它是**推断结果**而不是感知原文（不推进程名、不推空闲时长），
+ * 既符合 §1.1 的感知边界，又能让"用户经常在加班时来找我"
+ * 这类事实自然浮现。
+ *
+ * ⚠️ 记录的内容**不含任何感知原文**：只有"用户来互动了"这一事实
+ *    加上当时的工作模式。进程名、空闲时长这些原始信号永不入记忆。
+ */
+function recordInteractionMemory(): void {
+  if (!memory) return
+  const snapshot = perception?.snapshot
+  if (!snapshot) return
+
+  memory.recordEpisode(`用户在「${snapshot.workMode}」时来找我玩`, ['interaction', snapshot.workMode])
 }
 
 /**
@@ -436,6 +480,20 @@ function bootstrap(): void {
   controller.onDragEnd((position) => {
     savePosition(position)
   })
+
+  // ── 记忆（M3）──
+  //
+  // 放在感知之前：`start()` 只打开数据库，不读感知；但记情景记忆时
+  // 要读 `perception.snapshot` 拿工作模式，所以实例必须先于互动存在。
+  // `MemoryService.start()` 自己处理"数据库打不开"的情况——它会降级成
+  // 空实现并记一行诊断，绝不抛出去把启动流程打断。
+  memory = new MemoryService({ dbPath: memoryDbPath(), onDiagnostic: log })
+  const memoryStatus = memory.start()
+  log(
+    memoryStatus.available
+      ? `记忆已就绪（${String(memoryStatus.total)} 条）`
+      : `⚠️ 记忆不可用：${memoryStatus.reason ?? '未知原因'}（宠物照常工作，只是不记事）`,
+  )
 
   // ── 感知 ──
   //
@@ -589,12 +647,35 @@ if (!gotLock) {
 // 宠物窗口隐藏/关闭不应该结束应用；退出只由托盘菜单或 app.quit() 触发。
 // （verify/main.mjs 曾因为注册它而让诊断流程被提前杀掉。）
 
-app.on('will-quit', () => {
+/**
+ * ★ 这个标志必须在 **`before-quit`** 里置位，不能等 `will-quit`。
+ *
+ * Electron 的退出顺序是：`before-quit` → 关闭所有窗口 → `will-quit` → `quit`。
+ * 而下面那个 `close` 处理器会在 `isQuitting` 为 false 时
+ * `preventDefault()` 并改成"隐藏"——**取消关窗会让整个退出流程中止**。
+ *
+ * 曾经把它放在 `will-quit` 里，后果很具体：**托盘菜单的「退出小奇」不退出**。
+ * 点下去只看到宠物消失（那其实是 close 处理器把它设成了 hidden），
+ * 进程却一直留着——托盘图标还在、全局快捷键还占着。
+ * 日志里留下的是 `保留时间结束，退出。` 紧跟着 `隐身：窗口已隐藏`，
+ * 这两句连在一起就是"退出被自己的隐藏逻辑吃掉了"的指纹。
+ */
+app.on('before-quit', () => {
   isQuitting = true
+})
+
+app.on('will-quit', () => {
   // 退出顺序与启动严格逆序：先注销全局快捷键，再停感知与轮询，最后销毁托盘与窗口。
+  // 注意 `isQuitting` 已在 before-quit 置位，这里不再重复。
   globalShortcut.unregisterAll()
   perception?.dispose()
   perception = null
+  // 退出前跑最后一轮维护：把攒够次数的主题升级成语义记忆。
+  // 不做的话，"反复发生"的判定要等下一次启动后的第一个维护周期才生效，
+  // 而用户关机前的那几次互动就等于白记了。
+  memory?.runMaintenance()
+  memory?.stop()
+  memory = null
   controller?.dispose()
   tray?.destroy()
   tray = null

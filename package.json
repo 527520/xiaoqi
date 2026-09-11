@@ -28,6 +28,7 @@
     "verify:drag": "node scripts/verify-drag.mjs",
     "verify:emotions": "node scripts/verify-emotions.mjs",
     "verify:memory-delete": "node scripts/verify-memory-delete.mjs",
+    "verify:memory-wiring": "node scripts/verify-memory-wiring.mjs",
     "icons": "node scripts/generate-icons.mjs",
     "dist": "electron-vite build && electron-builder --win --config electron-builder.yml"
   },
