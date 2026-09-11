@@ -104,80 +104,80 @@ Win32 (koffi)                       Electron
 
 ---
 
-## 3. 记忆表结构（M3 实现，此处先定契约）
+## 3. 记忆表结构（M3 已实现；本节于 M3 施工后按**实际表结构**更正）
 
-SQLite + **FTS5**。施工令 §5 M3 明确「**不引入任何向量库**」——
-记忆规模是千条级，FTS + 时间/情绪/标签过滤完全够用，且比向量检索更可解释。
+> **更正说明（2026-09-12）**：本节初版（M0 时）写的是一张表一层记忆 +
+> 一张 FTS5 虚表 + 三个同步触发器，检索用 `MATCH`。M3 施工后实测**两处都要改**：
+> ①FTS5 做不到中文子串检索（见 `docs/verify-m3-fts5.md`）；
+> ②四张表在只有一层需要 FTS 的情况下，把"跨层按时间取最近记忆"变成了
+> 四次查询 + 归并，而四层的**字段**其实几乎相同。
+> 现在以 `src/main/core/memory/store.ts` 的 `SCHEMA_SQL` 为准（**表结构即文档**）。
+
+SQLite，**不引入任何向量库**（施工令 §5 M3 明确）。记忆规模是千条级，
+时间/层级/情绪过滤 + 子串检索完全够用，且比向量检索更可解释。
 
 ### 四层记忆
 
-| 表          | 语义                                             | 对应 `CONTEXT.md` |
+四层是**同一个 `kind` 维度的四个取值**，共用一张 `memories` 表——
+这样"按时间取最近 N 条"（拼 prompt 的主查询）是**一次查询**，不用跨表归并。
+
+| `kind`      | 语义                                             | 对应 `CONTEXT.md` |
 | ----------- | ------------------------------------------------ | ----------------- |
 | `episodic`  | 带时间戳的事件记录，按遗忘曲线衰减               | **情景记忆**      |
 | `semantic`  | 关于用户的稳定事实，由反复出现的情景记忆升级而来 | **语义记忆**      |
 | `emotional` | 带情绪标签的事件，**衰减最慢**                   | **情感记忆**      |
-| `working`   | 当前会话的短期上下文                             | 工作记忆          |
+| `working`   | 当前会话的短期上下文（**单独一张表**，见下）     | 工作记忆          |
 
 ```sql
--- 情景记忆
-CREATE TABLE episodic (
-  id           INTEGER PRIMARY KEY,
+CREATE TABLE memories (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind         TEXT    NOT NULL,          -- episodic / semantic / emotional
   occurred_at  INTEGER NOT NULL,          -- Unix ms
-  kind         TEXT    NOT NULL,          -- 事件类型（interaction / mode_change / …）
-  content      TEXT    NOT NULL,          -- 自然语言描述（供检索与拼 prompt）
+  content      TEXT    NOT NULL,          -- 自然语言描述（检索与拼 prompt 的对象）
   tags         TEXT    NOT NULL DEFAULT '',-- 逗号分隔；与工作模式标签对齐
   weight       REAL    NOT NULL DEFAULT 1.0,-- 遗忘曲线作用对象
-  created_at   INTEGER NOT NULL
-);
-CREATE INDEX idx_episodic_occurred ON episodic(occurred_at);
-CREATE INDEX idx_episodic_weight   ON episodic(weight);
-
--- 语义记忆（由情景记忆升级而来；记来源以便解释"为什么它记得"）
-CREATE TABLE semantic (
-  id           INTEGER PRIMARY KEY,
-  subject      TEXT    NOT NULL,          -- 关于谁/什么（多为 user）
-  fact         TEXT    NOT NULL,
-  confidence   REAL    NOT NULL DEFAULT 0.5,
-  derived_from INTEGER,                   -- → episodic.id（可空：用户手动添加）
-  created_at   INTEGER NOT NULL,
-  updated_at   INTEGER NOT NULL
-);
-
--- 情感记忆
--- ★ 施工令 §1.2⑪：「删掉的记忆必须真的消失」。因此这里**不设软删除标记**，
---   DELETE 就是真 DELETE；FTS 侧用触发器同步（见下），不留痕。
--- ★ ADR-0003：「被冷落」只存在于这一层，且**不可累积成怨气**。
---   因此不设"累积强度"字段，只记录离散事件；上限与每日重置在 core/ 里做。
-CREATE TABLE emotional (
-  id           INTEGER PRIMARY KEY,
-  occurred_at  INTEGER NOT NULL,
-  emotion      TEXT    NOT NULL,          -- 8 种情绪之一（§4.6）
-  intensity    REAL    NOT NULL,          -- 单次事件的强度，不做跨事件累加
-  content      TEXT    NOT NULL,
+  emotion      TEXT,                      -- 8 种情绪之一（§4.6）；仅 emotional 层有
+  intensity    REAL,                      -- 单次事件强度，**不做跨事件累加**
+  derived_from INTEGER,                   -- → memories.id（语义记忆记来源，可解释"为什么它记得"）
   created_at   INTEGER NOT NULL
 );
 
--- 工作记忆（当前会话；退出即清）
+-- 时间与层级是最常用的筛选维度（"最近的""还没忘的"）
+CREATE INDEX idx_memories_occurred ON memories(occurred_at);
+CREATE INDEX idx_memories_kind     ON memories(kind);
+-- 情感记忆按情绪聚合时用
+CREATE INDEX idx_memories_emotion  ON memories(emotion);
+
+-- 工作记忆：独立表。它是 key→value 的**短生命周期**映射，
+-- 没有时间/权重/情绪这些字段，硬并进 memories 会让一半列恒为 NULL。
 CREATE TABLE working (
-  key          TEXT PRIMARY KEY,
-  value        TEXT NOT NULL,
-  updated_at   INTEGER NOT NULL
-);
-
--- FTS5 全文索引（unicode61：对中文按字切分，子串检索可用，已在 verify V1 实测）
-CREATE VIRTUAL TABLE memory_fts USING fts5(
-  content,
-  tags,
-  source_table UNINDEXED,
-  source_id    UNINDEXED,
-  tokenize = 'unicode61'
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
 );
 ```
 
-**删除必须真的删除**（§1.2⑪）：`episodic` / `emotional` / `semantic` 上的
-`AFTER DELETE` 触发器同步删 `memory_fts` 对应行；配合 `PRAGMA secure_delete = ON`
-让被删内容不在数据库空闲页里残留。**日志与缓存中同样不得留痕**——
-删除路径不写日志内容，只写"删除了一条记忆"这一事实。
+**★ 刻意不建索引的地方**：`content` 列上**不建任何索引**。
+检索模式是 `LIKE '%词%'`，而**前导通配符在结构上使 B-tree 索引不可用**——
+`EXPLAIN QUERY PLAN` 实测任何子串查询都是 `SCAN`。建了不会被用到，
+只会拖慢写入并占空间。
+
+**★ 四层记忆的字段差异用可空列表达**，不用四张表：`emotion`/`intensity`
+只有 `emotional` 层有，`derived_from` 只有 `semantic` 层有。
+代价是列可空，收益是"拼 prompt 取最近记忆"只需一次查询。
+
+**删除必须真的删除**（§1.2⑪，硬约束）：`deleteMemory()` 是**物理 `DELETE`**，
+不是软删除标记——软删除会让数据仍留在文件里，只是被查询过滤掉，
+与这条约束**直接冲突**。配合：
+
+- `PRAGMA secure_delete = ON`（打开库即设），让被删内容不在空闲页里残留；
+- `VACUUM` 整理文件；
+- **删除路径不写日志内容**，只写"删除了一条记忆"这一事实。
+
+**这条约束是"删除必须可验证"的**，因此配了 `scripts/verify-memory-delete.mjs`：
+把真实 `.db` 文件当**二进制**扫原文的 UTF-8 字节，并带**对照组**
+（未删除的那条必须仍能扫到，否则"扫不到"可能只是扫描方法无效）。
+见 `pnpm verify:memory-delete`。
 
 ---
 
