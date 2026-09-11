@@ -58,7 +58,14 @@ test-results/
 # 它们是 `docs/verify-m1.md` 里结论的凭据，删掉就等于结论没有支撑。
 # 但每次跑应用都会产生一份运行日志，那个不该进仓库——
 # 所以运行期日志统一落到 `runtime/` 子目录并被忽略。
-docs/evidence/runtime/
+#
+# ⚠️ 注意这里**没有**用 `docs/evidence/runtime/`（带尾斜杠 = 整个目录排除）。
+#    Git 的否定规则**无法重新包含一个已被排除目录里面的文件**——
+#    实测：写了 `!docs/evidence/runtime/ledger/**` 也照样被忽略，
+#    因为 Git 根本不会往被排除的目录里看。所以必须先放行目录本身，
+#    再逐条排除里面的内容。
+docs/evidence/runtime/*
+!docs/evidence/runtime/ledger/
 docs/evidence/probe/
 
 # 上面第 13 行的 `*.log` 会把证据日志也一起忽略掉，这里显式放行。
