@@ -1,0 +1,45 @@
+原始光标位置：(500, 500)
+[app] 
+[app] [xiaoqi] ✓ QUNS 调用成功，当前 state=5
+[app] [xiaoqi] ✓ GetLastInputInfo 调用成功，空闲 804s
+[app] [xiaoqi] [renderer:uncaught] boot-checkpoint
+[app] [xiaoqi]    installErrorReporting() 已执行
+[app] [xiaoqi] 显示：窗口已显示（形态 active）
+[app] [xiaoqi] 初始状态：光标 (500,500) 窗口 (2316,1196) 220×220 判定 passthrough 形态 active
+[app] [xiaoqi] 宠物已就绪。形态=active
+[app] [xiaoqi] 系统状态：QUNS_ACCEPTS_NOTIFICATIONS（正常，可打扰）
+
+宠物窗口：(2316, 1196) 220×220
+[app] [xiaoqi] 穿透 → pet（光标 2426,1334；窗口 2316,1196 220×220；形态 active）
+
+✅ 从窗口外进入身体中心
+     光标 (2426, 1334) → 实际 pet，期望 pet
+[app] [xiaoqi] 穿透 → passthrough（光标 2320,1200；窗口 2316,1196 220×220；形态 active）
+
+✅ 窗口左上角透明留白
+     光标 (2320, 1200) → 实际 passthrough，期望 passthrough
+
+✅ 窗口上边缘右侧留白
+     光标 (2530, 1200) → 实际 passthrough，期望 passthrough（状态未变）
+[app] [xiaoqi] 穿透 → pet（光标 2456,1282；窗口 2316,1196 220×220；形态 active）
+
+✅ 右耳（轮廓内，应可点）
+     光标 (2456, 1282) → 实际 pet，期望 pet
+[app] [xiaoqi] 穿透 → passthrough（光标 2426,1248；窗口 2316,1196 220×220；形态 active）
+
+✅ 双耳之间的凹口（窗口内但轮廓外，应穿透）
+     光标 (2426, 1248) → 实际 passthrough，期望 passthrough
+[app] [xiaoqi] 穿透 → pet（光标 2488,1362；窗口 2316,1196 220×220；形态 active）
+
+✅ 尾巴末端 (172,166)（轮廓内，应可点）
+     光标 (2488, 1362) → 实际 pet，期望 pet
+
+✅ 回到身体中心
+     光标 (2426, 1334) → 实际 pet，期望 pet（状态未变）
+[app] [xiaoqi] 穿透 → passthrough（光标 2116,996；窗口 2316,1196 220×220；形态 active）
+
+✅ 移到窗口外
+     光标 (2116, 996) → 实际 passthrough，期望 passthrough
+
+结果：8/8 项符合预期
+光标已还原到 (500, 500)

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>小奇</title>
+    <!--
+      CSP 刻意只允许 'self'。
+
+      小奇不加载任何远程资源、不内联脚本、不 eval——宠物形象是**程序化绘制**的
+      （PixiJS Graphics），不是图片资源，因此连 img-src 都不需要放开。
+
+      注意：这里与 electron.vite.config.ts 没有任何重复配置的机会，
+      因为本项目不使用自定义协议加载素材。将来若引入用户资源包
+      （assets/pets/<名字>/），必须同时改这里和构建配置——
+      参考项目 openpets 把"新协议忘了加进两处 CSP"列为它的头号 bug 来源。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://localhost:* ws://127.0.0.1:*"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

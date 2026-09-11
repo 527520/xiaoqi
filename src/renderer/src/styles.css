@@ -1,0 +1,47 @@
+/*
+ * 宠物窗口的样式。
+ *
+ * ★ 三条硬性要求，破一条就会在桌面上露馅：
+ *
+ * 1. `background: transparent` —— 窗口本身是 transparent 的（见 createPetWindow.ts），
+ *    但 HTML 默认是白底。如果这里不透明，用户会看到一块白色方块。
+ * 2. `overflow: hidden` + 尺寸锁死 —— 任何滚动条或溢出都会破坏透明窗的观感。
+ * 3. **不能有 hover 光标变化的元素**：透明区域由主进程判定穿透，
+ *    浏览器这边不该参与命中决策（渲染进程拿不到鼠标事件，除非主进程放行）。
+ */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+
+  /* 桌宠不是文本应用：禁掉选中、拖拽、右键菜单带来的意外观感。 */
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+
+  /* 光标形状交给系统；宠物本体不显示"可点击"手型，
+     因为点它是"摸它"而不是"按按钮"。 */
+  cursor: default;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+  /* 宠物由 PixiJS 画在 canvas 上，DOM 只做容器。 */
+  line-height: 0;
+}
+
+canvas {
+  display: block;
+  /* 关键：canvas 必须完全透明，否则会在透明窗里画出一块黑或白。 */
+  background: transparent;
+}
