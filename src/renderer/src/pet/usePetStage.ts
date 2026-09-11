@@ -193,6 +193,12 @@ export function usePetStage(
     stage.setMaxFps(fps > 0 ? fps : 1)
   }, [state?.mode, state?.frameRate])
 
+  // ── 情绪 → 表情 ──
+  // 主进程推来的是**推断结果**（不是原始感知信号），渲染层只负责把它画出来。
+  useEffect(() => {
+    if (state?.emotion) stageRef.current?.setEmotion(state.emotion)
+  }, [state?.emotion])
+
   // ── 视线跟随 ──
   // 只在光标位置真的变化时更新；主进程已经在"光标够远"时给 null。
   useEffect(() => {

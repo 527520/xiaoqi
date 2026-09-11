@@ -5,7 +5,7 @@ import { type BrowserWindow, Menu, Tray, app, globalShortcut, ipcMain, nativeIma
 import { describeUserNotificationState } from '@shared/geometry'
 import { PET_SCALE_DEFAULT, PET_SCALE_STEPS } from '@shared/constants'
 import { IPC } from '@shared/ipc'
-import type { DisturbLevel, PetRuntimeState, VisibilityMode } from '@shared/types'
+import type { DisturbLevel, Emotion, PetRuntimeState, VisibilityMode } from '@shared/types'
 
 import { decidePanelLog, stateFingerprint } from './core/debugPanel'
 import { resolveDisturbLevel } from './core/disturbGate'
@@ -457,6 +457,16 @@ function bootstrap(): void {
       : {}),
   })
   perception.start()
+
+  // 取证用：锁死情绪，便于逐个截图核对八种表情。
+  // 真实情绪变化很慢（精力一小时才掉几个百分点），不锁的话没法比对。
+  const forced = process.env.XIAOQI_FORCE_EMOTION
+  if (forced) {
+    log(`⚠️ 情绪已锁定为 ${forced}（XIAOQI_FORCE_EMOTION，仅取证用）`)
+    perception.forceEmotion(forced as Emotion)
+    // 锁定的那一刻就把新情绪推给渲染层，不必等下一拍
+    broadcastState()
+  }
 
   const entry = resolveRendererEntry()
   if (entry.url) {

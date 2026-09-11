@@ -190,7 +190,10 @@ export class Perception {
     const interactionActive =
       this.#emotion.emotion === 'surprised' && sinceInteraction < INTERACTION_EMOTION_WINDOW_MS
 
-    if (!interactionActive) {
+    if (this.#forcedEmotion) {
+      // 取证用：锁死情绪，且跳过限频（否则要等 3 秒才生效）
+      this.#emotion = { emotion: this.#forcedEmotion, since: now }
+    } else if (!interactionActive) {
       this.#emotion = stepEmotion(this.#emotion, this.#physiology, work.mode, now)
     }
 
@@ -230,6 +233,21 @@ export class Perception {
       this.#snapshot = { ...this.#snapshot, emotion: next }
       this.#onState?.(this.#snapshot)
     }
+  }
+
+  /**
+   * 强制把情绪锁成某个值（**仅供取证**）。
+   *
+   * 为什么需要它：真实情绪变化很慢（精力一小时才掉几个百分点），
+   * 想核对"八种表情画出来分别长什么样"就得等半小时。
+   * 这个开关让取证脚本能逐个截图比对。
+   *
+   * ⚠️ 生产路径不要用它。它是诊断工具，不是功能。
+   */
+  #forcedEmotion: Emotion | null = null
+
+  forceEmotion(emotion: Emotion | null): void {
+    this.#forcedEmotion = emotion
   }
 
   /** 给调试面板用的可读摘要。**不含任何用户内容**（只有进程名与聚合量）。 */

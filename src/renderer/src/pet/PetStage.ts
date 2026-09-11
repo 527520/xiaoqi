@@ -2,6 +2,7 @@ import { type Application, Container, FillGradient, Graphics } from 'pixi.js'
 
 import { PET_GEOMETRY } from '@shared/constants'
 import { PET_BODY, PET_FACE, PET_PALETTE, PET_STROKE_WIDTH } from '@shared/palette'
+import type { Emotion } from '@shared/types'
 
 import {
   BLINK_DURATION_SECONDS,
@@ -14,6 +15,7 @@ import {
   swayAngle,
   tailSway,
 } from './animation'
+import { faceFor } from './emotionFace'
 
 /**
  * 宠物渲染舞台 —— PixiJS 程序化几何角色。
@@ -106,6 +108,13 @@ export class PetStage {
 
   /** 形态。由外部按主进程推送的状态设置。 */
   mode: 'active' | 'silent' | 'hidden' = 'active'
+
+  /** 情绪。由外部按主进程推送的推断结果设置。 */
+  #emotion: Emotion = 'calm'
+
+  setEmotion(emotion: Emotion): void {
+    this.#emotion = emotion
+  }
 
   constructor(app: Application, onInteract: () => void) {
     this.#app = app
@@ -524,25 +533,39 @@ export class PetStage {
     const g = this.#eyes
     g.clear()
 
-    const openness =
-      this.mode === 'silent' ? 0.12 : eyeOpenness(this.#blink, BLINK_DURATION_SECONDS)
-    const happy = bounce > 0.25
+    // 情绪决定表情。眼睛是这只宠物**唯一会说话的部位**（几何角色，没有嘴部
+    // 动画、没有贴图），所以表情全部集中在眼睛上——这是"用最少的变化
+    // 传达最多信息"的做法。映射表在 `emotionFace.ts`，是纯函数、有单测
+    // （其中一条断言"八种情绪必须长得不一样"，否则那个情绪等于不存在）。
+    const face = faceFor(this.#emotion)
+
+    const blink = eyeOpenness(this.#blink, BLINK_DURATION_SECONDS)
+    // 静默时闭眼打盹；被点时的"笑"由 bounce 触发，优先于基础情绪
+    // ——用户的即时互动必须压过背景情绪，这是「无条件回应」的可见形式。
+    const openness = this.mode === 'silent' ? 0.12 : Math.max(0.1, blink * face.openScale)
+    const smiling = bounce > 0.25 || face.eyes === 'smile'
+
+    // 情绪带来的整头位移：很小（≤3px），只为了让姿态有方向感。
+    const headY = offsetY + face.headTiltY
 
     for (const eye of [PET_FACE.eyeLeft, PET_FACE.eyeRight]) {
       const cx = eye.cx
-      const cy = eye.cy + offsetY
+      const cy = eye.cy + headY
+      // "眯起"是横向压窄（专注），"半闭"是竖向压扁（困/无聊）——
+      // 两者不能混用：横向压窄看起来是"认真"，竖向压扁看起来是"没精神"。
+      const rx = face.eyes === 'narrowed' ? eye.rx * 0.82 : eye.rx
 
-      if (happy) {
-        // 笑眼：一段上凸的弧线
-        g.moveTo(cx - eye.rx, cy + 1)
-          .quadraticCurveTo(cx, cy - eye.ry * 0.85, cx + eye.rx, cy + 1)
+      if (smiling) {
+        // 笑眼：一段上凸的弧线。压扁只是"变小"，弧线才是"笑"。
+        g.moveTo(cx - rx, cy + 1)
+          .quadraticCurveTo(cx, cy - eye.ry * 0.85, cx + rx, cy + 1)
           .stroke({ color: PET_PALETTE.ink, width: 2.6, cap: 'round' })
         continue
       }
 
-      // 眼形：竖椭圆，按 openness 压扁（眨眼）
+      // 眼形：竖椭圆，按 openness 压扁（眨眼 + 情绪）
       const ry = Math.max(0.6, eye.ry * openness)
-      g.ellipse(cx, cy, eye.rx, ry).fill(PET_PALETTE.eye)
+      g.ellipse(cx, cy, rx, ry).fill(PET_PALETTE.eye)
 
       // 瞳孔 + 高光只在没闭眼时画（闭着时画高光会露出缝隙里的白点）
       if (openness > 0.35) {
