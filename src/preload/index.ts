@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 import { IPC } from '../shared/ipc'
 import type { XiaoqiBridge } from '../shared/ipc'
-import type { PetRuntimeState, VisibilityMode } from '../shared/types'
+import type { MemoryLedgerEntry, PetRuntimeState, VisibilityMode } from '../shared/types'
 
 /**
  * preload —— 主进程与渲染进程之间**唯一的**桥。
@@ -54,6 +54,21 @@ const bridge: XiaoqiBridge = {
       ipcRenderer.removeListener(IPC.stateChanged, handler)
     }
   },
+
+  // ── 记忆账本（M3）──
+  //
+  // 这几条只在记忆账本窗口里被调用。宠物窗口拿得到同样的 bridge，
+  // 但它不画账本。真要隔离得拆成两个 preload——见 shared/ipc.ts 的说明。
+
+  listMemories: (query?: string) =>
+    ipcRenderer.invoke(IPC.memoryList, query) as Promise<MemoryLedgerEntry[]>,
+
+  forgetMemory: (id: number) => ipcRenderer.invoke(IPC.memoryForget, id) as Promise<boolean>,
+
+  forgetAllMemories: () => ipcRenderer.invoke(IPC.memoryForgetAll) as Promise<number>,
+
+  rememberFact: (content: string) =>
+    ipcRenderer.invoke(IPC.memoryRemember, content) as Promise<number | null>,
 }
 
 contextBridge.exposeInMainWorld('xiaoqi', bridge)

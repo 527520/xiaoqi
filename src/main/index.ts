@@ -16,6 +16,7 @@ import { MemoryService } from './memory/service'
 import { selfCheckPlatform } from './platform'
 import { win32Platform } from './platform/win32'
 import { createPetWindow, resolveRendererEntry, trayIconPath } from './window/createPetWindow'
+import { createLedgerWindow, resolveLedgerEntry } from './window/ledgerWindow'
 import { PetWindowController } from './window/petWindow'
 import { loadWindowState, savePosition, saveScale } from './window/windowState'
 
@@ -58,6 +59,21 @@ app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
 let petWindow: BrowserWindow | null = null
 let controller: PetWindowController | null = null
 let tray: Tray | null = null
+/** 记忆账本窗口（单例）。见 `openLedger()`。 */
+let ledgerWindow: BrowserWindow | null = null
+
+/**
+ * preload 产物路径。
+ *
+ * ⚠️ 必须是 `.cjs`，与 electron.vite.config.ts 里 preload 的
+ *    `entryFileNames: '[name].cjs'` 对应。
+ *    沙箱化的 preload 不支持 ESM，所以不能产成 `.mjs`——
+ *    那样 preload 会静默不执行，`window.xiaoqi` 不存在，
+ *    而报错会出现在渲染进程里一个看起来无关的地方。
+ *
+ * 提到模块作用域是因为**两个窗口共用它**（宠物窗口与记忆账本窗口）。
+ */
+const PRELOAD_PATH = join(__dirname, '../preload/index.cjs')
 
 /**
  * 感知器：三项信号 → 工作模式 / 生理 / 情绪。
@@ -233,6 +249,15 @@ function refreshTrayMenu(): void {
     },
     { type: 'separator' },
     {
+      // 记忆账本（§5 M3）。放在"恢复点击"之上：用户想查看/清理记忆时
+      // 通常正被某件事困扰（"它怎么记得这个？"），应当一眼能找到。
+      label: '它记得什么…',
+      click: () => {
+        openLedger()
+      },
+    },
+    { type: 'separator' },
+    {
       label: '恢复点击（宠物点不到时用）',
       click: () => {
         controller?.recoverClickThrough()
@@ -390,6 +415,105 @@ function registerIpc(): void {
     }
     event.returnValue = null
   })
+
+  // ── 记忆账本（M3）──
+  //
+  // 记忆**内容**会经过这几条通道送往渲染进程（账本要显示它）。
+  // 这是必须的——账本的意义就是"让用户看见它记住了什么"。
+  // 但内容**不进日志**：日志是无意的留痕渠道，界面是用户主动打开的。
+
+  ipcMain.handle(IPC.memoryList, (_event, query: unknown) => {
+    const text = typeof query === 'string' && query.trim().length > 0 ? query.trim() : undefined
+    return memory?.listLedger(text) ?? []
+  })
+
+  ipcMain.handle(IPC.memoryForget, (_event, raw: unknown) => {
+    const id = Number(raw)
+    if (!Number.isInteger(id)) throw new Error(`非法的记忆 id：${String(raw)}`)
+    // 返回值如实反映"有没有真的从库里删掉"——这是对用户的承诺（§1.2⑪）。
+    return memory?.forget(id) ?? false
+  })
+
+  ipcMain.handle(IPC.memoryForgetAll, () => memory?.forgetAll() ?? 0)
+
+  ipcMain.handle(IPC.memoryRemember, (_event, raw: unknown) => {
+    if (typeof raw !== 'string') throw new Error('记忆内容必须是字符串')
+    const content = raw.trim()
+    // 空内容不写库：它会在账本里显示成一条空白，并让升级聚类多出一个噪声主题。
+    if (content.length === 0) return null
+    return memory?.remember(content) ?? null
+  })
+}
+
+/**
+ * 打开记忆账本（§5 M3：可见、可删、可一键清空、可手动记住/忘掉）。
+ *
+ * ── 为什么是单例窗口 ──
+ *
+ * 连点两次托盘菜单不该开出两个账本窗口。已有窗口就 `focus()`——
+ * 这也顺带处理了"窗口被最小化"的情况（`restore()` 再 `focus()`）。
+ *
+ * ⚠️ 账本窗口**不**受 `isQuitting` 那套"关闭即隐藏"逻辑管：
+ *    它是普通窗口，用户点 X 就应该真的关掉。宠物窗口才需要"关不掉"。
+ */
+function openLedger(): void {
+  if (!memory) {
+    log('⚠️ 记忆不可用，无法打开账本')
+    return
+  }
+
+  if (ledgerWindow && !ledgerWindow.isDestroyed()) {
+    if (ledgerWindow.isMinimized()) ledgerWindow.restore()
+    ledgerWindow.focus()
+    return
+  }
+
+  log('打开记忆账本')
+  const window = createLedgerWindow({ preloadPath: PRELOAD_PATH })
+  ledgerWindow = window
+
+  const entry = resolveLedgerEntry()
+  if (entry.url) {
+    void window.loadURL(entry.url)
+  } else if (entry.file) {
+    void window.loadFile(entry.file)
+  }
+
+  window.once('ready-to-show', () => {
+    window.show()
+  })
+
+  // 用户关掉窗口就销毁，下次再开是新的——账本没有"隐藏起来备用"的必要，
+  // 留着只会让"我现在看到的是不是最新状态"变得不确定。
+  window.on('closed', () => {
+    ledgerWindow = null
+  })
+}
+
+/**
+ * 启动后自动打开记忆账本（仅当 `XIAOQI_OPEN_LEDGER_MS=<延迟毫秒>`）。
+ *
+ * ── 为什么需要这个开关 ──
+ *
+ * 账本只能从**托盘菜单**打开，而本机没有可自动化的输入通道去点托盘菜单
+ * （托盘是 shell 的，不属于我们的窗口树，CDP 也够不着）。
+ * 没有这个开关，"账本界面长什么样"就既截不了图也验不了证——
+ * 而施工令 §5 M3 明确要求账本截图作为证据。
+ *
+ * 与 `XIAOQI_FORCE_EMOTION` / `XIAOQI_RESIZE_TEST` 同类：**只给取证用**，
+ * 生产不要设。它走的正是托盘菜单调的同一个 `openLedger()`，
+ * 因此验证覆盖的是真实路径，不是一个"专供测试的分支"。
+ */
+function scheduleLedgerIfRequested(): void {
+  const raw = process.env.XIAOQI_OPEN_LEDGER_MS
+  if (!raw) return
+  const ms = Number(raw)
+  if (!Number.isFinite(ms) || ms < 0) return
+
+  setTimeout(() => {
+    log('（取证）自动打开记忆账本')
+    openLedger()
+  }, ms)
 }
 
 /**
@@ -453,7 +577,7 @@ function bootstrap(): void {
   //    沙箱化的 preload 不支持 ESM，所以不能产成 `.mjs`——
   //    那样 preload 会静默不执行，`window.xiaoqi` 不存在，
   //    而报错会出现在渲染进程里一个看起来无关的地方。
-  const preloadPath = join(__dirname, '../preload/index.cjs')
+  const preloadPath = PRELOAD_PATH
 
   // 恢复上次的缩放与位置。
   // 顺序很重要：**先缩放再定位**——窗口尺寸变了以后，保存的左上角坐标
@@ -572,6 +696,7 @@ function bootstrap(): void {
   registerIpc()
   createTray()
   registerShortcuts()
+  scheduleLedgerIfRequested()
 }
 
 let isQuitting = false

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>小奇记得什么</title>
+    <!--
+      CSP 与宠物页面同源策略一致，但 connect-src 不放开 ws://。
+
+      宠物页面放开 ws 是为了 Pixi 的调试通道；账本是纯静态渲染，
+      没有任何需要长连接的东西，因此这里只留 'self'。
+
+      注意 electron-vite 的 dev server 用 http 提供这两个页面，
+      `script-src 'self'` 在 dev 与打包后都成立。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'"
+    />
+  </head>
+  <body>
+    <div id="ledger-root"></div>
+    <script type="module" src="/src/ledger/main.tsx"></script>
+  </body>
+</html>

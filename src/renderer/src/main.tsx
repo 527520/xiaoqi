@@ -9,7 +9,7 @@
 // 且必须排在会抛错的那些导入之前。
 import { installErrorReporting } from './installErrorReporting'
 
-installErrorReporting()
+installErrorReporting('pet')
 
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'

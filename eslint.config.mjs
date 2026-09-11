@@ -135,6 +135,22 @@ export default tseslint.config(
     languageOptions: { globals: globals.node },
   },
 
+  // scripts/ 下的取证脚本：豁免"导出函数必须显式写类型"。
+  //
+  // 为什么豁免：这些是 `.mjs`，没有类型语法可用，只能写 JSDoc；
+  // 而 `explicit-module-boundary-types` **不读 JSDoc**（实测：JSDoc 已按
+  // 规范写全，7 条报错一条不少）。于是这条规则对 `.mjs` 只有两个结局——
+  // 报一堆改不掉的错，或者逼人把有用的脚本改成 `.ts`。
+  // 两者都不划算，所以在**这个文件范围内**关掉它。
+  // ⚠️ 范围刻意收窄到 `scripts/**/*.mjs`：`src/` 下的 TS 一行都不放松，
+  //    那里才是"禁止隐式 any 漏网"真正要守住的地方。
+  {
+    files: ['scripts/**/*.mjs'],
+    rules: {
+      '@typescript-eslint/explicit-module-boundary-types': 'off',
+    },
+  },
+
   // 渲染进程：浏览器环境 + React
   {
     files: ['src/renderer/**/*.{ts,tsx}'],

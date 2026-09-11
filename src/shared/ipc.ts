@@ -1,4 +1,4 @@
-import type { PetRuntimeState, VisibilityMode } from './types'
+import type { MemoryLedgerEntry, PetRuntimeState, VisibilityMode } from './types'
 
 /**
  * IPC 通道清单 —— **白名单**，施工令 §4.4。
@@ -58,6 +58,22 @@ export const IPC = {
   rendererError: 'renderer:error',
   /** 主进程推给渲染进程的状态变化（on → PetRuntimeState）。 */
   stateChanged: 'state:changed',
+
+  // ── 记忆账本（M3；施工令 §5 M3「可见、可删、可一键清空、可手动记住/忘掉」）──
+  //
+  // ⚠️ 这几条通道只在**记忆账本窗口**里有意义。宠物窗口的渲染进程虽然
+  // 拿得到同一个 bridge，但它不画账本，也就不会调它们。
+  // 需要真隔离时应拆成两个 preload——这里先不做，因为账本窗口
+  // 与宠物窗口同属本应用、同一个信任域，拆开只会增加两处需要同步的配置。
+
+  /** 拉取账本列表（invoke → MemoryLedgerEntry[]）。 */
+  memoryList: 'memory:list',
+  /** 删掉一条记忆（invoke → 是否真的删掉了）。 */
+  memoryForget: 'memory:forget',
+  /** 一键清空（invoke → 删掉的条数）。 */
+  memoryForgetAll: 'memory:forget-all',
+  /** 手动"让它记住"一条事实（invoke → 新记忆 id，失败为 null）。 */
+  memoryRemember: 'memory:remember',
 } as const
 
 /** 通道名字面量联合类型，防止拼写漂移。 */
@@ -92,6 +108,22 @@ export interface XiaoqiBridge {
   reportError(message: string, stack: string): void
   /** 订阅状态变化；返回取消订阅函数。 */
   onStateChanged(listener: (state: PetRuntimeState) => void): () => void
+
+  // ── 记忆账本 ──
+
+  /** 列出记忆（可选关键词过滤，走中文子串匹配）。 */
+  listMemories(query?: string): Promise<MemoryLedgerEntry[]>
+  /**
+   * 删掉一条记忆。
+   *
+   * 返回 `true` 表示**真的从数据库里删掉了**（不是打个标记）——
+   * 这是对用户的承诺（§1.2⑪），所以返回值要如实反映。
+   */
+  forgetMemory(id: number): Promise<boolean>
+  /** 一键清空。返回删掉的条数。 */
+  forgetAllMemories(): Promise<number>
+  /** 手动"让它记住"一条事实。返回新记忆的 id，失败为 null。 */
+  rememberFact(content: string): Promise<number | null>
 }
 
 declare global {

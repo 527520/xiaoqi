@@ -185,3 +185,47 @@ export interface PetRuntimeState {
    */
   readonly disturbLevel: DisturbLevel
 }
+
+/**
+ * 记忆账本里的一行（M3）。
+ *
+ * ── 为什么单独一个类型，而不是直接复用 `core/memory/model.ts` 的 `MemoryRecord` ──
+ *
+ * `MemoryRecord` 是**内部**形态：它有 `weight`（当前权重还由遗忘曲线算）、
+ * `derivedFrom`（来源 id）这类实现细节。账本是给用户看的，
+ * 它需要的是"这是什么、什么时候、它还记不记得住、为什么记得"，
+ * 而不是一个浮点权重。
+ *
+ * 两者刻意不共用：内部形态一变，不该连带把界面契约也改掉。
+ * 转换只发生在主进程的 IPC 处理器里，是**唯一**一处。
+ */
+export interface MemoryLedgerEntry {
+  readonly id: number
+  /** 记忆层级（情景 / 语义 / 情感）。 */
+  readonly kind: 'episodic' | 'semantic' | 'emotional'
+  /** 事件发生时刻（Unix 毫秒）。 */
+  readonly occurredAt: number
+  /** 自然语言描述。 */
+  readonly content: string
+  readonly tags: readonly string[]
+  /** 仅情感记忆有。 */
+  readonly emotion?: Emotion
+  /** 仅情感记忆有：**单次**事件强度 ∈ [0,1]（ADR-0003：不做跨事件累加）。 */
+  readonly intensity?: number
+  /**
+   * 它"记得有多牢" ∈ [0,1]，由遗忘曲线算出。
+   *
+   * 语义记忆恒为 1（不衰减）。给用户看这个值是为了让"遗忘"这件事**可见**——
+   * 否则一条记忆某天自己消失会显得像 bug。
+   */
+  readonly strength: number
+  /** 来源情景记忆的 id（仅语义记忆、且是推断出来的时候有）。 */
+  readonly derivedFrom?: number
+  /**
+   * 是不是用户**手动**让它记住的（而不是它自己推断出来的）。
+   *
+   * 这个区分很重要：用户手写的事实不该被遗忘曲线清掉，
+   * 也不该让用户以为"这是它自己总结出来的"。
+   */
+  readonly userAuthored: boolean
+}

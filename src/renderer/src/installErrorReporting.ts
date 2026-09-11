@@ -14,10 +14,14 @@
  *
  * 它在 `main.tsx` 的**最顶部**导入并立刻调用，早于 React 与 Pixi 的任何求值，
  * 因此连模块初始化期的报错也能捞到。
+ *
+ * @param page 上报来源标签（`pet` / `ledger`）。两个窗口共用一个通道，
+ *   没有标签就分不清"是宠物崩了还是账本崩了"。
  */
-export function installErrorReporting(): void {
+export function installErrorReporting(page: string): void {
   // 打点：确认安装时机。启动期的报错如果早于这一行，就说明还有更早的求值路径。
-  window.xiaoqi.reportError('boot-checkpoint', 'installErrorReporting() 已执行')
+  // 标注为 boot-checkpoint 而非 error，下面的断言据此把它与真实错误区分开。
+  window.xiaoqi.reportError('boot-checkpoint', `${page} 页面已开始执行`)
 
   window.addEventListener('error', (event) => {
     const error = event.error as unknown

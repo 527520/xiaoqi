@@ -3,11 +3,12 @@ import { dirname } from 'node:path'
 
 import Database from 'better-sqlite3'
 
-import type { Emotion } from '@shared/types'
+import type { Emotion, MemoryLedgerEntry } from '@shared/types'
 
 import { shouldForget, type MemoryRecord } from '../core/memory/model'
 import { planPromotions, type PromotionPlan } from '../core/memory/promote'
 import { MemoryStore } from '../core/memory/store'
+import { toLedgerEntry } from './ledger'
 
 /**
  * 记忆子系统的**接线层**：把纯逻辑（`core/memory/`）接到真实文件与时钟上。
@@ -211,6 +212,18 @@ export class MemoryService {
       this.#noteFailure('检索记忆失败', error)
       return []
     }
+  }
+
+  /**
+   * 账本列表（给记忆账本界面用）。
+   *
+   * 与 `search()` 共用同一套"还没忘"的口径，只是把内部形态转成界面契约。
+   * 强度由主进程算好再送出去，界面不做任何衰减计算——否则两套口径
+   * 会造出"显示着 30% 牢度却突然消失"这种像 bug 的现象。
+   */
+  listLedger(query?: string): MemoryLedgerEntry[] {
+    const now = this.#now()
+    return this.search(query ? { query } : {}).map((record) => toLedgerEntry(record, now))
   }
 
   // ── 删除（施工令 §1.2⑪：必须真的删除）──

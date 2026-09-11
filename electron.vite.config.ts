@@ -67,7 +67,18 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
-        input: { index: resolve('src/renderer/index.html') },
+        // ★ 两个页面：宠物（透明小窗）与记忆账本（普通窗口）。
+        //
+        // 分成两个入口而不是一个页面里切换，因为两者要加载的东西完全不同：
+        // 宠物要 Pixi（主 chunk 1.4MB），账本一行 Pixi 都不需要。
+        // 合成一个入口就等于让账本窗口也为渲染库买单。
+        //
+        // ⚠️ 产出路径与 `window/ledgerWindow.ts` 的 `resolveLedgerEntry()`
+        //    必须一致（`out/renderer/ledger.html`）。改这里就要改那里。
+        input: {
+          index: resolve('src/renderer/index.html'),
+          ledger: resolve('src/renderer/ledger.html'),
+        },
       },
     },
   },

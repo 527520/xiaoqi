@@ -1,0 +1,326 @@
+/*
+ * 记忆账本的样式。
+ *
+ * ── 配色与宠物同源，但分工不同 ──
+ *
+ * 宠物身上是"云蓝灰 + 墨 + 琥珀眼睛"（见 shared/palette.ts）。
+ * 账本沿用同一族颜色，但**底色不透明**——它是要读字的地方。
+ * 唯一的亮色仍留给"注意力"：这里是删除按钮与情绪标签。
+ *
+ * ── 字体分工 ──
+ *
+ * 界面文字用系统 UI 字体（微软雅黑），**记忆原文用衬线体**。
+ * 这不只是装饰：记忆原文是这个界面的主角，衬线体在中文里
+ * 天然带一点"记录/日记"的气质，而且与周边的界面字形成层次，
+ * 用户一眼能分清"哪些是它记的，哪些是界面在说话"。
+ */
+
+:root {
+  --paper: #eef2f7;
+  --card: #ffffff;
+  --ink: #2f3a4d;
+  --ink-soft: #64748b;
+  --line: #d7dfea;
+  --accent: #4a7fb5;
+  --amber: #d98a3f;
+  --danger: #c2564f;
+  --radius: 10px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  block-size: 100%;
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  /* 账本是普通窗口，允许选中文字（用户可能想复制一条记忆）。 */
+  user-select: text;
+}
+
+.ledger {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px 20px 12px;
+  max-inline-size: 780px;
+  margin-inline: auto;
+}
+
+/* ── 头部 ── */
+
+.ledger__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ledger__title {
+  margin: 0;
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.ledger__subtitle {
+  margin: 2px 0 0;
+  color: var(--ink-soft);
+  font-size: 12.5px;
+}
+
+/* ── 控件 ── */
+
+.ledger__toolbar {
+  display: flex;
+  gap: 8px;
+}
+
+.field {
+  flex: 1 1 auto;
+  min-inline-size: 0;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13.5px;
+}
+
+.field:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: var(--accent);
+}
+
+.field::placeholder {
+  color: #9aa8bb;
+}
+
+.btn {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition:
+    background-color 0.12s ease,
+    border-color 0.12s ease,
+    color 0.12s ease;
+}
+
+.btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: #3f6f9f;
+  border-color: #3f6f9f;
+  color: #fff;
+}
+
+.btn--sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.btn--danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: #ad4842;
+  border-color: #ad4842;
+  color: #fff;
+}
+
+.ledger__error {
+  margin: 0;
+  padding: 8px 11px;
+  border-radius: var(--radius);
+  background: #fbeceb;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.ledger__empty {
+  margin: 24px 0;
+  color: var(--ink-soft);
+  text-align: center;
+}
+
+/* ── 列表 ── */
+
+.ledger__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.card {
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  /* 左侧色条标示层级，比一个小色块徽章更容易扫视。 */
+  border-inline-start: 3px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+
+.card--episodic {
+  border-inline-start-color: #9fb3c8;
+}
+
+.card--semantic {
+  border-inline-start-color: var(--accent);
+}
+
+.card--emotional {
+  border-inline-start-color: var(--amber);
+}
+
+.card__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.card__spacer {
+  flex: 1 1 auto;
+}
+
+.card__time {
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.card__strength {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.card__strengthBar {
+  display: inline-block;
+  inline-size: 42px;
+  block-size: 5px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.card__strengthFill {
+  display: block;
+  block-size: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.card__content {
+  margin: 8px 0 0;
+  /* 记忆原文：衬线 + 稍大字号，与界面文字拉开层次。
+     中文衬线体在 14px 以下笔画会糊，所以这里给到 15px 并放松行距。 */
+  font-family: 'Songti SC', 'SimSun', Georgia, serif;
+  font-size: 15px;
+  line-height: 1.75;
+  /* 中文长句加一点点字距，密集的方块字才不至于挤成一片。 */
+  letter-spacing: 0.01em;
+  overflow-wrap: anywhere;
+}
+
+.card__tags {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-block-start: 8px;
+}
+
+.card__origin {
+  color: var(--ink-soft);
+  font-size: 11.5px;
+}
+
+.tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.tag--episodic {
+  background: #e6ecf3;
+  color: #5a7086;
+}
+
+.tag--semantic {
+  background: #e2ecf7;
+  color: #37628f;
+}
+
+.tag--emotional {
+  background: #fbeedd;
+  color: #a3661f;
+}
+
+.tag--authored {
+  background: #e6f2e8;
+  color: #3f7a4c;
+}
+
+.tag--emotion {
+  background: #fbeedd;
+  color: #a3661f;
+}
+
+.tag--plain {
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 11px;
+}
+
+/* ── 页脚 ── */
+
+.ledger__footer {
+  margin-block-start: 4px;
+  padding-block: 10px;
+  border-block-start: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 11.5px;
+}
