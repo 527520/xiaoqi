@@ -1,0 +1,49 @@
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 构建产物
+dist/
+out/
+build/
+release/
+*.tsbuildinfo
+
+# 日志
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# 环境与密钥（绝不能提交）
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# 本地运行时数据（记忆数据库、配置、日志）
+*.db
+*.db-journal
+*.db-wal
+*.sqlite
+*.sqlite3
+data/
+config.local.json
+
+# 用户私有宠物资源（可能是用户自购/自绘素材，不随仓库分发）
+assets/pets/*/
+!assets/pets/example/
+
+# 编辑器 / 系统
+.vscode/*
+!.vscode/extensions.json
+.idea/
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# 测试与覆盖率
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
