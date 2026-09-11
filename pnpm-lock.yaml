@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      better-sqlite3:
+        specifier: 13.0.3
+        version: 13.0.3
       koffi:
         specifier: 3.2.1
         version: 3.2.1
@@ -1190,6 +1193,10 @@ packages:
     engines: {node: '>=6.0.0'}
     hasBin: true
 
+  better-sqlite3@13.0.3:
+    resolution: {integrity: sha512-RbOBxmLBG8uvFUc15X9+9SFemKcQ0WBuISBVkpuiaUB2qblC8UWlHEjdWVoZ8AdhSwmoEgsiXKfopX0CQxaACQ==}
+    engines: {node: '>=22'}
+
   bidi-js@1.1.0:
     resolution: {integrity: sha512-fX1Onk0tdVPC7obPWB5EbJ1z7NVhLq4m2xZLq2YXBkxzMXIGRpNMU88n0EPgWseKl12J7zXs7qrDxPK4sRs2fg==}
 
@@ -1986,6 +1993,10 @@ packages:
   node-abi@4.35.0:
     resolution: {integrity: sha512-ymk4aIzxdPopw2giv8Fs1Ec6vybGkjmyxUwVqhkI4MCy2tVfXdkOGGWieWVjL0THgH+7a8lRdevyupoYj3Js/Q==}
     engines: {node: '>=22.12.0'}
+
+  node-addon-api@8.9.2:
+    resolution: {integrity: sha512-VijLXbi3UACN69I0JVXJsX4tjACjNoQDgv2gTF6sx2wWEi8tkSg2eX8p5gSIFi8z2+DL3oHmY6OyKce38SDolg==}
+    engines: {node: ^18 || ^20 || >= 21}
 
   node-api-version@0.2.1:
     resolution: {integrity: sha512-2xP/IGGMmmSQpI1+O/k72jF/ykvZ89JeuKX3TLJAYPDVLUalrshrLHkeVcCCZqG/eEa635cr8IBYzgnDvM2O8Q==}
@@ -3618,6 +3629,10 @@ snapshots:
 
   baseline-browser-mapping@2.11.21: {}
 
+  better-sqlite3@13.0.3:
+    dependencies:
+      node-addon-api: 8.9.2
+
   bidi-js@1.1.0:
     dependencies:
       require-from-string: 2.0.2
@@ -4560,6 +4575,8 @@ snapshots:
   node-abi@4.35.0:
     dependencies:
       semver: 7.7.4
+
+  node-addon-api@8.9.2: {}
 
   node-api-version@0.2.1:
     dependencies:

@@ -18,7 +18,18 @@
 #
 # electron-winstaller: false
 #   只在打 Squirrel.Windows 包时用得上；本项目走 NSIS，不需要。
+#
+# better-sqlite3: false
+#   与 koffi 同理：13 起走 N-API，官方分发**预编译二进制**，
+#   install 脚本只是把对应平台的那份放到位。本机没有任何 C++ 编译器，
+#   若让它 fallback 到 node-gyp 编译就必然失败——而那条路径本就不该走。
+#   ★ 这一点不靠推测：`verify/` 的 V1 实测过 13.0.3 在 Electron 主进程里
+#     免 rebuild 直接加载成功（含 FTS5 中文子串检索），
+#     `docs/verification.md` 记录了当时的原始输出。
+#     本项目的启动自检会**再验一次**（真的打开一次数据库并跑一条 FTS 查询），
+#     因为"能 require"与"能真的用"是两件事。
 allowBuilds:
   esbuild: true
   koffi: false
+  better-sqlite3: false
   electron-winstaller: false
