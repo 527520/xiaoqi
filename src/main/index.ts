@@ -7,6 +7,7 @@ import { PET_SCALE_DEFAULT, PET_SCALE_STEPS } from '@shared/constants'
 import { IPC } from '@shared/ipc'
 import type { DisturbLevel, PetRuntimeState, VisibilityMode } from '@shared/types'
 
+import { decidePanelLog, stateFingerprint } from './core/debugPanel'
 import { resolveDisturbLevel } from './core/disturbGate'
 import { targetFrameRate } from './core/frameRate'
 import { Perception, type PerceivedState } from './core/perception'
@@ -131,47 +132,38 @@ function currentDisturbLevel(): DisturbLevel {
 }
 
 /**
- * 调试面板的采样节流状态。
+ * 调试面板的节流状态。
  *
- * ⚠️ 面板不能每拍都打一行。加完 `XIAOQI_PERCEPTION_INTERVAL_MS` 之后，
- *    250ms 的取证节奏会产出**每秒约 4 行**状态日志——第一次跑就淹了整份日志，
- *    真正有用的行（形态切换、错误）全被埋掉。
- *    施工令 §9 的原则是"不打扰"，调试输出也不该例外。
- *
- * 现在的规则：**变化必打**（那才是有信息量的），平稳时每 30 秒打一次心跳。
- * 这样"它在动"和"它卡住了"依然能区分，而日志量降到可读。
+ * ⚠️ 判定逻辑**不在这里**——它在 `core/debugPanel.ts`，是纯函数、有单测。
+ *    面板最初每拍打一行，加上取证用的 `XIAOQI_PERCEPTION_INTERVAL_MS` 之后
+ *    变成每秒约 4 行，第一次跑就淹了整份日志。
+ *    把"该不该打"抽出去之后，"会不会又淹"就成了可断言的事。
  */
-const PANEL_HEARTBEAT_MS = 30_000
-let lastPanelKey = ''
+let lastPanelFingerprint = ''
 let lastPanelAt = 0
 
 /** 调试面板：把当前状态打一行到日志。 */
 function logPerceivedState(state: PerceivedState): void {
   if (!DEBUG_STATE_ENABLED) return
 
-  const p = state.physiology
   const level = currentDisturbLevel()
-  // "有意义的变化"：工作模式 / 情绪 / 打扰级别 / 前台进程。
-  // 生理量是连续变化的，不参与 key（否则每拍都算"变了"）。
-  const key = [
-    state.processName ?? '?',
-    state.workMode,
-    state.emotion.emotion,
-    level,
-    String(state.notificationState),
-  ].join('|')
+  const fingerprint = stateFingerprint(state, level)
+  const decision = decidePanelLog({
+    fingerprint,
+    now: Date.now(),
+    lastFingerprint: lastPanelFingerprint,
+    lastLoggedAt: lastPanelAt,
+  })
+  if (!decision.shouldLog) return
+  lastPanelFingerprint = fingerprint
+  lastPanelAt = Date.now()
 
-  const now = Date.now()
-  const changed = key !== lastPanelKey
-  if (!changed && now - lastPanelAt < PANEL_HEARTBEAT_MS) return
-  lastPanelKey = key
-  lastPanelAt = now
-
+  const p = state.physiology
   // 保留一位小数：生理量每小时只变几个百分点，整数会把变化抹平，
   // 让"它在动"与"它卡住了"看起来一样。
   const pct = (v: number): string => `${(v * 100).toFixed(1)}%`
   log(
-    `[状态]${changed ? '' : '（心跳）'} +${String(Math.round(state.uptimeMs / 1000))}s ` +
+    `[状态]${decision.isHeartbeat ? '（心跳）' : ''} +${String(Math.round(state.uptimeMs / 1000))}s ` +
       `${state.processName ?? '（拿不到进程）'} → ${state.workMode}｜情绪 ${state.emotion.emotion}｜` +
       `打扰 ${level}｜精力 ${pct(p.energy)} 饥饿 ${pct(p.hunger)} 无聊 ${pct(p.boredom)} 社交 ${pct(p.social)}｜` +
       `空闲 ${state.idleMs === null ? '?' : String(Math.round(state.idleMs / 1000))}s｜QUNS=${String(state.notificationState)}`,
