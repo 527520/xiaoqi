@@ -1,39 +1,66 @@
 import type { PetGeometry } from './types'
 
 /**
- * 宠物的几何定义 —— **唯一的尺寸真相来源**。
+ * 宠物的几何定义 —— **唯一的尺寸真相来源**（**设计空间**坐标）。
  *
- * 渲染层（PixiJS）与命中测试（core/petHitTest.ts）都读这一份数据，
+ * 渲染层（PixiJS）与命中测试（core/cursorRouter.ts）都读这一份数据，
  * 所以"看起来能点的地方"和"真的能点的地方"永远一致。
- * 改这里就是改宠物的大小，两边同时生效。
+ * 改这里就是改宠物的形状，两边同时生效。
+ *
+ * ⚠️ 这里的坐标是 **220×220 设计空间**，不是屏幕像素。
+ *    实际窗口尺寸 = 设计空间 × 缩放（见 `petWindowSize(scale)`）。
+ *    命中测试**必须先缩放再换算**，否则宠物放大后会"点不到边缘"。
  *
  * 设计约束（施工令 §4.3③）：`setShape` 的矩形是**并集，无法挖洞**，
- * 因此宠物必须是**单一连通轮廓**——耳朵与尾巴在几何上必须与身体相接，
- * 否则那部分会在某些未来方案下被切掉。
+ * 因此宠物必须是**单一连通轮廓**——耳朵与尾巴在几何上必须与身体相接。
  */
+export const PET_DESIGN_SIZE = 220
+
 export const PET_GEOMETRY: PetGeometry = {
-  window: { width: 220, height: 220 },
+  window: { width: PET_DESIGN_SIZE, height: PET_DESIGN_SIZE },
 
-  // 身体：略高于宽的蛋形。比正圆更有"活物"感，也留出下方空间放影子。
-  body: { cx: 110, cy: 138, rx: 56, ry: 60 },
-
-  // 耳朵：小圆耳，与身体顶部**相交**（不是相切）以保证轮廓连通。
+  // 身体：**上窄下宽的蛋形**（rx 略小于 ry，重心在下）。
   //
-  // 半径刻意取小（20）。早期用 r=26 且间距更宽时，
-  // 双耳+圆身读起来像"老鼠"而不是"猫/狐"——图标实测后调小的。
-  earLeft: { cx: 80, cy: 86, r: 20 },
-  earRight: { cx: 140, cy: 86, r: 20 },
+  // 关于"像什么"的取舍：早期版本是圆身 + 两枚宽间距大圆耳，
+  // 视觉上读起来像**老鼠**；只有把身体收窄、耳朵做尖并靠近，
+  // 才读得出"猫"那一类。这一步完全靠截图肉眼比对调出来的，
+  // 没有可自动化的判据——所以改动这里时**务必重新截图看**。
+  body: { cx: 110, cy: 139, rx: 53, ry: 59 },
 
-  // 尾巴：右下角一团，与身体右侧**相交**（中心距 < rx + r）。
-  // 位置压低到 cy 下方，这样它读起来像"从身后探出的尾巴"而不是"侧面的瘤"。
-  tailTip: { cx: 172, cy: 166, r: 18 },
+  // 耳朵：尖耳，与身体顶部**相交**（不是相切）以保证轮廓连通。
+  earLeft: { cx: 84, cy: 90, r: 19 },
+  earRight: { cx: 136, cy: 90, r: 19 },
+
+  // 尾巴：右下角。
+  //
+  // 位置与大小试过四版，结论是：**尾巴要小而远**。
+  // 大而贴近身体的版本，无论曲线怎么调都会与身体轮廓糊成一片，
+  // 读起来像"鳍"而不是"尾巴"；小一点、离开身体一点，
+  // 反而一眼就能读出"身后有条尾巴"。
+  // 连通性由中心线起点埋在体内保证，不靠这个圆心。
+  tailTip: { cx: 186, cy: 186, r: 16 },
 }
 
-/** 宠物窗口的透明留白：窗口比宠物大，多出来的部分是纯透明、必须穿透。 */
-export const PET_WINDOW_SIZE = {
-  width: PET_GEOMETRY.window.width,
-  height: PET_GEOMETRY.window.height,
-} as const
+/** 缩放档位（托盘菜单用）。1 是设计尺寸，宠物实际约 220×220 DIP。 */
+export const PET_SCALE_STEPS = [0.75, 1, 1.25, 1.5, 2] as const
+
+export type PetScale = (typeof PET_SCALE_STEPS)[number]
+
+/** 默认缩放。 */
+export const PET_SCALE_DEFAULT: PetScale = 1
+
+/**
+ * 由缩放算出**实际窗口尺寸**（DIP）。
+ *
+ * 唯一入口：主进程放窗、渲染进程设 canvas、命中测试换算都必须走这里，
+ * 否则三处会各自取整、慢慢漂开。
+ */
+export function petWindowSize(scale: number): { width: number; height: number } {
+  return {
+    width: Math.round(PET_DESIGN_SIZE * scale),
+    height: Math.round(PET_DESIGN_SIZE * scale),
+  }
+}
 
 /** 宠物相对工作区右/下边缘的默认间距（DIP）。 */
 export const PET_MARGIN = 24

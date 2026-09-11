@@ -15,6 +15,14 @@ export const IPC = {
   stateGet: 'state:get',
   /** 用户手动设置形态：正常/静默/隐身（invoke → PetRuntimeState）。 */
   modeSet: 'mode:set',
+  /**
+   * 设置宠物缩放（invoke → PetRuntimeState）。
+   *
+   * M1 的托盘菜单直接调主进程，不走这里；这条通道是给**渲染进程**
+   * （将来的设置界面）用的。加上它也让缩放能被自动化验证覆盖——
+   * 「托盘菜单点一下」没法自动点，但这条 invoke 可以。
+   */
+  scaleSet: 'scale:set',
   /** 渲染进程报告"用户点了宠物"，用于帧率预算（send，单向）。 */
   petInteract: 'pet:interact',
   /** 渲染进程报告交互动画结束（send，单向）。 */
@@ -54,6 +62,8 @@ export interface XiaoqiBridge {
   getState(): Promise<PetRuntimeState>
   /** 设置形态。返回应用后的新快照。 */
   setMode(mode: VisibilityMode): Promise<PetRuntimeState>
+  /** 设置宠物缩放。返回应用后的新快照。 */
+  setScale(scale: number): Promise<PetRuntimeState>
   /** 报告用户点了宠物。 */
   notifyInteraction(): void
   /** 报告交互动画开始/结束，用于帧率降档。 */

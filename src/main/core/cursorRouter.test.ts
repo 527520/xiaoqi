@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 
-import { PET_GEOMETRY, PET_WINDOW_SIZE } from '@shared/constants'
+import { PET_GEOMETRY, petWindowSize } from '@shared/constants'
 import type { Rect } from '@shared/types'
 
 import { resolveCursorRoute, shouldFlipIgnoreMouseEvents } from './cursorRouter'
 
 const GEOMETRY = PET_GEOMETRY
+/** 缩放 1 时的窗口尺寸。缩放相关用例见下面单独一组。 */
+const PET_WINDOW_SIZE = petWindowSize(1)
 
 /** 宠物窗口在屏幕上的位置（DIP）。 */
 const WINDOW: Rect = {

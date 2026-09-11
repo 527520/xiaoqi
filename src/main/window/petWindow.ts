@@ -4,7 +4,7 @@ import {
   CURSOR_POLL_INTERVAL_MS,
   PET_GEOMETRY,
   PET_MARGIN,
-  PET_WINDOW_SIZE,
+  petWindowSize,
   QUNS_POLL_INTERVAL_MS,
   TOPMOST_REASSERT_INTERVAL_MS,
 } from '@shared/constants'
@@ -55,6 +55,7 @@ export class PetWindowController {
   }
 
   #isAnimating = false
+  #scale = 1
 
   #cursorTimer: NodeJS.Timeout | null = null
   #qunsTimer: NodeJS.Timeout | null = null
@@ -92,9 +93,56 @@ export class PetWindowController {
 
   /** 宠物窗口当前所在的显示器工作区（DIP），用于调试面板与多屏定位。 */
   currentWorkArea(): Rect {
-    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+    // 用**窗口**所在显示器，而不是光标所在显示器。
+    // 光标在验证脚本里会被移动（那正是脚本在做的事），
+    // 用光标会让"当前工作区"随验证步骤跳动，读数不可比。
+    const display = screen.getDisplayMatching(this.#window.getBounds())
     const area = display.workArea
     return { x: area.x, y: area.y, width: area.width, height: area.height }
+  }
+
+  /** 当前缩放倍数。 */
+  get scale(): number {
+    return this.#scale
+  }
+
+  /**
+   * 改变缩放：**真的改窗口尺寸**（方案 B）。
+   *
+   * 依据：本机实测过 `setBounds` 改一个 `transparent` 窗口的尺寸后
+   * **透明仍然成立**（见 `docs/verify-m1.md` 的缩放实测一节）——
+   * 施工令只警告了 `resizable: true` 可能破透明，没有禁止 `setBounds`。
+   *
+   * 窗口尺寸变化后**必须重算命中测试与穿透状态**：几何在设计空间里只有一份，
+   * 命中判定要按新缩放换算，否则宠物放大后只有左上角可点。
+   */
+  setScale(scale: number): void {
+    if (this.#disposed) return
+    if (!Number.isFinite(scale) || scale <= 0) return
+    if (scale === this.#scale) return
+
+    const before = this.bounds()
+    this.#scale = scale
+
+    const size = petWindowSize(scale)
+    // 以**右下角为锚点**缩放：宠物默认贴在右下角，
+    // 若以左上角为锚点，放大会把它推出工作区、缩小会留下空档。
+    this.#window.setBounds({
+      x: Math.round(before.x + before.width - size.width),
+      y: Math.round(before.y + before.height - size.height),
+      width: size.width,
+      height: size.height,
+    })
+
+    // 尺寸变了，穿透判定必须立刻重算（否则会有一段"点不到"的窗口）
+    this.#cursorRoute = 'passthrough'
+    this.#window.setIgnoreMouseEvents(true)
+    this.#tickCursor()
+    this.#reassertContentProtection()
+    this.#reassertTopmost()
+
+    this.#log(`缩放 → ${String(scale)}（窗口 ${String(size.width)}×${String(size.height)}）`)
+    this.#onStateChanged()
   }
 
   /**
@@ -136,6 +184,42 @@ export class PetWindowController {
   bounds(): Rect {
     const b = this.#window.getBounds()
     return { x: b.x, y: b.y, width: b.width, height: b.height }
+  }
+
+  /**
+   * 光标在**宠物设计空间**里的位置；够远时返回 `null`。
+   *
+   * 用途只有一个：让它的眼睛跟着光标转。这是这只宠物"有生命感"的主要来源。
+   *
+   * 两个刻意的处理：
+   * ① **只在光标接近窗口时才有值**（超出窗口外 80 设计像素就返回 null）。
+   *    否则屏幕上任何一次鼠标移动都会让主进程往渲染进程推消息，
+   *    而绝大多数时候宠物根本看不见光标。
+   * ② 返回的是**设计空间**坐标（未缩放），渲染进程不需要再关心缩放，
+   *    因此缩放与视线跟随互不干扰。
+   */
+  cursorInDesignSpace(): Point | null {
+    if (this.mode !== 'active') return null
+
+    const point = this.#cursorPoint()
+    if (!point) return null
+
+    const b = this.bounds()
+    const s = this.#scale
+    const reach = 80 // 设计空间像素
+    const localX = (point.x - b.x) / s
+    const localY = (point.y - b.y) / s
+
+    const size = PET_GEOMETRY.window.width
+    if (
+      localX < -reach ||
+      localY < -reach ||
+      localX > size + reach ||
+      localY > size + reach
+    ) {
+      return null
+    }
+    return { x: localX, y: localY }
   }
 
   /**
@@ -197,7 +281,7 @@ export class PetWindowController {
     // 隐身态没有任何可见内容 → 一律穿透，避免"看不见但挡住下层"的幽灵窗口。
     const bounds = this.bounds()
     const next: CursorRoute = shouldAcceptCursor(this.mode)
-      ? resolveCursorRoute(PET_GEOMETRY, bounds, point)
+      ? resolveCursorRoute(PET_GEOMETRY, bounds, point, this.#scale)
       : 'passthrough'
 
     if (!shouldFlipIgnoreMouseEvents(this.#cursorRoute, next)) return
@@ -400,14 +484,15 @@ export class PetWindowController {
    * 跨屏定位与混合 DPI 无法在本机验证。实现按规格写，但不声称已通过。
    */
   placeAtDefaultPosition(): void {
-    const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+    const display = screen.getDisplayMatching(this.#window.getBounds())
     const area = display.workArea
+    const size = petWindowSize(this.#scale)
 
     this.#window.setBounds({
-      x: Math.round(area.x + area.width - PET_WINDOW_SIZE.width - PET_MARGIN),
-      y: Math.round(area.y + area.height - PET_WINDOW_SIZE.height - PET_MARGIN),
-      width: PET_WINDOW_SIZE.width,
-      height: PET_WINDOW_SIZE.height,
+      x: Math.round(area.x + area.width - size.width - PET_MARGIN),
+      y: Math.round(area.y + area.height - size.height - PET_MARGIN),
+      width: size.width,
+      height: size.height,
     })
   }
 }

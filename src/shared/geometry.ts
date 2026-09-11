@@ -31,12 +31,39 @@ export function pointInCircle(
 }
 
 /**
+ * 把**设计空间**的几何按缩放换算到**窗口局部坐标**。
+ *
+ * ⚠️ 这是宠物可缩放之后新加的必经一步，漏掉它的后果很具体：
+ * 宠物放大到 2 倍后，命中测试仍在用设计空间的坐标，
+ * 于是**只有左上角那一小块能点**，其余部分点不到——
+ * 正是 openai/codex 桌宠 #34227 记录的那类"命中区与形象脱节"。
+ *
+ * 命中测试与渲染都从这一份缩放后的几何出发，因此不会各算各的。
+ */
+export function scalePetGeometry(geometry: PetGeometry, scale: number): PetGeometry {
+  const s = (value: number): number => value * scale
+  return {
+    window: { width: s(geometry.window.width), height: s(geometry.window.height) },
+    body: {
+      cx: s(geometry.body.cx),
+      cy: s(geometry.body.cy),
+      rx: s(geometry.body.rx),
+      ry: s(geometry.body.ry),
+    },
+    earLeft: { cx: s(geometry.earLeft.cx), cy: s(geometry.earLeft.cy), r: s(geometry.earLeft.r) },
+    earRight: { cx: s(geometry.earRight.cx), cy: s(geometry.earRight.cy), r: s(geometry.earRight.r) },
+    tailTip: { cx: s(geometry.tailTip.cx), cy: s(geometry.tailTip.cy), r: s(geometry.tailTip.r) },
+  }
+}
+
+/**
  * 点是否落在宠物的**可见轮廓**内。
  *
  * 轮廓 = 身体椭圆 ∪ 双耳 ∪ 尾巴（施工令 §4.3③：`setShape` 的矩形是并集、
  * 无法挖洞，所以宠物必须是**单一连通轮廓**；这里的并集形式与之一致）。
  *
- * `point` 用**窗口局部坐标**（DIP）。调用方负责把屏幕坐标翻译过来。
+ * `point` 用**窗口局部坐标**（DIP），且 `geometry` 必须已经是**缩放后**的
+ * （见 `scalePetGeometry`）。调用方负责把屏幕坐标翻译过来。
  */
 export function hitTestPet(geometry: PetGeometry, point: Point): boolean {
   return (
@@ -48,22 +75,25 @@ export function hitTestPet(geometry: PetGeometry, point: Point): boolean {
 }
 
 /**
- * 把屏幕坐标（DIP）翻译成窗口局部坐标（DIP），再判命中。
+ * 把屏幕坐标（DIP）翻译成窗口局部坐标（DIP），**按缩放换算几何**，再判命中。
  *
- * 这是渲染层与主进程共用的**唯一**命中判定入口。
+ * 这是主进程与渲染层共用的**唯一**命中判定入口。`scale` 由调用方给出
+ * （主进程知道自己设了多大），几何在设计空间里保持一份，避免两处漂移。
  *
  * ⚠️ 历史教训（写在这里防止以后有人"优化"掉它）：
  * openai/codex 的桌面宠物有多个公开 bug 都是"命中区与可见形象脱节"
  * （#42190 拖动/缩放后穿透到底下窗口、#34227 运行数小时后只有上半身可点）。
  * 根因是命中区与渲染各算各的。本函数是唯一判定入口 + 几何来自
- * `shared/petGeometry.ts` 的单一真相，就是为了从结构上排除这类漂移。
+ * `shared/constants.ts` 的单一真相 + 缩放走同一个 `scalePetGeometry`，
+ * 就是为了从结构上排除这类漂移。
  */
 export function hitTestPetScreenPoint(
   geometry: PetGeometry,
   windowOrigin: Point,
   screenPoint: Point,
+  scale = 1,
 ): boolean {
-  return hitTestPet(geometry, {
+  return hitTestPet(scalePetGeometry(geometry, scale), {
     x: screenPoint.x - windowOrigin.x,
     y: screenPoint.y - windowOrigin.y,
   })

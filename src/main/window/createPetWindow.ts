@@ -2,7 +2,7 @@ import { join } from 'node:path'
 
 import { BrowserWindow, app } from 'electron'
 
-import { PET_WINDOW_SIZE } from '@shared/constants'
+import { PET_SCALE_DEFAULT, petWindowSize } from '@shared/constants'
 
 /**
  * 宠物窗口的构造。
@@ -22,10 +22,15 @@ import { PET_WINDOW_SIZE } from '@shared/constants'
  * 另注：`transparent` 窗口**无法**在显示后再切换成不透明，反之亦然。
  * 所以这些参数只在创建时能定，运行期不可改。
  */
-export function createPetWindow(options: { readonly preloadPath: string }): BrowserWindow {
+export function createPetWindow(options: {
+  readonly preloadPath: string
+  readonly scale?: number
+}): BrowserWindow {
+  const size = petWindowSize(options.scale ?? PET_SCALE_DEFAULT)
+
   const window = new BrowserWindow({
-    width: PET_WINDOW_SIZE.width,
-    height: PET_WINDOW_SIZE.height,
+    width: size.width,
+    height: size.height,
 
     // ★ 1
     frame: false,

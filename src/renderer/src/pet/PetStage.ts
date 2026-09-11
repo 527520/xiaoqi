@@ -1,53 +1,104 @@
-import { type Application, Container, Graphics } from 'pixi.js'
+import { type Application, Container, FillGradient, Graphics } from 'pixi.js'
 
 import { PET_GEOMETRY } from '@shared/constants'
-import { PET_FACE, PET_PALETTE } from '@shared/palette'
+import { PET_BODY, PET_FACE, PET_PALETTE, PET_STROKE_WIDTH } from '@shared/palette'
 
-import { BLINK_DURATION_SECONDS, breathPose, eyeOpenness, swayAngle } from './animation'
-
-/** 交互动画时长（秒）。 */
-export const REACTION_DURATION_SECONDS = 0.9
+import {
+  BLINK_DURATION_SECONDS,
+  bounceEnvelope,
+  breathPose,
+  earSecondarySway,
+  eyeOpenness,
+  gazeOffset,
+  REACTION_DURATION_SECONDS,
+  swayAngle,
+  tailSway,
+} from './animation'
 
 /**
  * 宠物渲染舞台 —— PixiJS 程序化几何角色。
  *
+ * ── 视觉方向（一句话）──
+ *
+ * **美感来自几何本身的精湛，而不是画得像动物。** 它是程序化几何角色，
+ * 那就把这个约束变成风格：干净的曲线、统一的光源（一律右上）、
+ * 有物理感的形变。配色用云蓝灰主体 + 墨蓝描边，
+ * **只把暖色留给眼睛与腮红**，于是它的"活"集中在脸上。
+ *
  * ── 三条必须遵守的渲染约定 ──
  *
  * ① **全部坐标用 DIP（CSS 像素），不碰 `devicePixelRatio`。**
- *    这是施工令 §4.3⑥ 的解法：Pixi 用 `resolution: 1`，
- *    把 DPI 缩放**整个交给 Chromium 合成器**。
- *    自己乘一次 `scaleFactor` 是错的——那个值被 Chromium 折进了**文字缩放**
- *    （源码原话：1.5 文字 × 2.0 显示 → device_scale_factor = 3.0），
- *    拿它算精灵尺寸会在有文字缩放的机器上放大 1.5 倍。
- *    保持 1 CSS px = 1 纹理 px，高 DPI 屏上依然清晰，因为合成器负责放大。
+ *    施工令 §4.3⑥ 的解法：Pixi 用 `resolution: 1`，把 DPI 缩放
+ *    **整个交给 Chromium 合成器**。自己乘一次 `scaleFactor` 是错的——
+ *    那个值被 Chromium 折进了**文字缩放**，拿它算精灵尺寸会在有文字缩放的
+ *    机器上被额外放大。
  *
  * ② **形状与 `shared/constants.ts` 的 PET_GEOMETRY 同源。**
- *    命中测试用的是同一组数字，所以"看起来能点的地方"与"真的能点的地方"
- *    不可能漂移。这是 openai/codex 桌宠那批"命中区与可见形象脱节" bug
- *    （#42190 / #34227）的结构性对策。
+ *    命中测试用同一组数字（按缩放换算），所以"看起来能点的地方"与
+ *    "真的能点的地方"不可能漂移。
  *
  * ③ **帧率由外部控制**（`setMaxFps`），不常驻 60fps。
  */
+/**
+ * 尾巴的形状参数（设计空间）。
+ *
+ * ── 为什么最终是这个形状 ──
+ *
+ * 这条尾巴试了**五版**才成立，过程记在这里避免重走：
+ *  ① 圆团                 → "侧面的瘤"
+ *  ② 两点收尖             → "鲨鱼鳍"
+ *  ③ 末端大幅上钩         → 钩子自交，出现一条黑竖线
+ *  ④ 沿中心线放样做粗细渐变 → 仍然读成"鳍"：它与身体同色、又紧贴体侧，
+ *                            于是和身体糊成一片，边界只剩一条斜线
+ *  ⑤ **本版**：一个**明确分离**的圆角尖椭圆，只是从身体后面探出来一点
+ *
+ * 第 ⑤ 版之所以成立，是因为它放弃"画一条完整的尾巴"，改为"只露出尾巴尖"。
+ * 露出一点点、形状自洽、与身体有明显分界——这三件事同时满足时，
+ * 大脑才会把它读成"身后有条尾巴"，而不是"身上长了个东西"。
+ * 这也是很多极简角色设计的通行做法。
+ */
+const TAIL_SHAPE = {
+  /** 相对身体中心的位置（比例）。 */
+  offset: { x: 0.78, y: 0.62 },
+  /** 椭圆半径。细长一些才像尾巴尖。 */
+  rx: 9,
+  ry: 19,
+  /** 倾斜角（弧度）。约 42°，斜向右下，与"从身后垂下来"一致。 */
+  rotation: 0.74,
+} as const
+
 export class PetStage {
   readonly #app: Application
   readonly #root = new Container()
-  readonly #body = new Graphics()
-  readonly #ears = new Graphics()
-  readonly #tail = new Graphics()
+  /** 会随呼吸形变的部分。 */
   readonly #shadow = new Graphics()
-  readonly #cheeks = new Graphics()
-  // 眼睛没有中间 Container：直接是挂在 root 上的 Graphics。理由见 `#drawEyes()`。
-  readonly #eyeLeftGraphics = new Graphics()
-  readonly #eyeRightGraphics = new Graphics()
+  readonly #tail = new Graphics()
+  readonly #ears = new Graphics()
+  readonly #body = new Graphics()
+  readonly #blush = new Graphics()
+  readonly #mouth = new Graphics()
+  /** 眼睛：**直接挂在 root 上**，不套中间 Container（理由见 `#drawEyes()`）。 */
+  readonly #eyes = new Graphics()
   readonly #onInteract: () => void
 
   #elapsed = 0
   /** >0 表示正在播放交互动画，值为剩余秒数。 */
   #reactionRemaining = 0
   #blink = 0
-  #nextBlinkAt = 2.2
+  #nextBlinkAt = 2.4
   /** 当前生效的 maxFPS，避免每帧重复写（Pixi 的 setter 会重置计时基线）。 */
   #appliedMaxFps = -1
+  /** 缩放。由外部按主进程推送的值设置。 */
+  #scale = 1
+  /** 光标（设计空间局部坐标）；null = 够远，眼睛回正。 */
+  #cursor: { x: number; y: number } | null = null
+  /** 平滑后的视线方向，避免光标跳变时瞳孔瞬移。 */
+  #gaze = { x: 0, y: 0 }
+  /** 动画状态回调（通知主进程调整帧率预算）。 */
+  #animationCallback: ((isAnimating: boolean) => void) | null = null
+
+  /** 形态。由外部按主进程推送的状态设置。 */
+  mode: 'active' | 'silent' | 'hidden' = 'active'
 
   constructor(app: Application, onInteract: () => void) {
     this.#app = app
@@ -57,32 +108,34 @@ export class PetStage {
     this.#drawTail()
     this.#drawEars()
     this.#drawBody()
-    this.#drawCheeks()
+    this.#drawBlush()
+    this.#drawMouth()
     this.#drawEyes()
 
-    // 层级：影子在最底、身体覆盖尾巴根部与耳朵根部、五官在最上。
-    //
-    // 注意眼睛是**直接把 Graphics 挂在 root 上**，没有中间 Container——
-    // 理由见 `#drawEyes()` 的注释（套 Container 会导致眼睛一个像素都不画）。
+    // 层级（从下到上）：
+    //   影子 → 尾巴 → 耳朵 → 身体 → 腮红/嘴 → 眼睛
+    // 身体盖住耳朵与尾巴的根部，"接得上"而不是"贴上去"。
     this.#root.addChild(this.#shadow)
     this.#root.addChild(this.#tail)
     this.#root.addChild(this.#ears)
     this.#root.addChild(this.#body)
-    this.#root.addChild(this.#cheeks)
-    this.#root.addChild(this.#eyeLeftGraphics)
-    this.#root.addChild(this.#eyeRightGraphics)
+    this.#root.addChild(this.#blush)
+    this.#root.addChild(this.#mouth)
+    this.#root.addChild(this.#eyes)
 
     app.stage.addChild(this.#root)
     app.stage.eventMode = 'static'
     app.stage.hitArea = {
       contains: (x: number, y: number) => {
+        // 命中区用**缩放后**的几何。漏掉这一步，宠物放大后只有左上角可点。
+        const s = this.#scale
         const b = PET_GEOMETRY.body
         const dl = PET_GEOMETRY.earLeft
         const dr = PET_GEOMETRY.earRight
         const dt = PET_GEOMETRY.tailTip
-        const inEllipse = ((x - b.cx) / b.rx) ** 2 + ((y - b.cy) / b.ry) ** 2 <= 1
+        const inEllipse = ((x - b.cx * s) / (b.rx * s)) ** 2 + ((y - b.cy * s) / (b.ry * s)) ** 2 <= 1
         const inCircle = (c: { cx: number; cy: number; r: number }): boolean =>
-          (x - c.cx) ** 2 + (y - c.cy) ** 2 <= c.r * c.r
+          (x - c.cx * s) ** 2 + (y - c.cy * s) ** 2 <= (c.r * s) ** 2
         return inEllipse || inCircle(dl) || inCircle(dr) || inCircle(dt)
       },
     }
@@ -92,15 +145,24 @@ export class PetStage {
     })
   }
 
-  /** 交互动画开始/结束的回调（用于通知主进程调整帧率预算）。 */
-  #animationCallback: ((isAnimating: boolean) => void) | null = null
-
   onAnimationStateChange(callback: (isAnimating: boolean) => void): void {
     this.#animationCallback = callback
   }
 
+  /** 设置缩放（整数倍或小数都可以）。 */
+  setScale(scale: number): void {
+    if (!Number.isFinite(scale) || scale <= 0) return
+    this.#scale = scale
+    this.#root.scale.set(scale)
+  }
+
+  /** 设置光标位置（**设计空间**局部坐标）；`null` = 够远，眼睛回正。 */
+  setCursor(cursor: { x: number; y: number } | null): void {
+    this.#cursor = cursor
+  }
+
   /**
-   * 播放"被拍一下"的反应。
+   * 播放"被点一下"的反应。
    *
    * M1 只有这一种反应，所以不设参数；M2 接入 8 种情绪时再引入
    * `reaction` 判别参数并在这里分派。（有意识地不加"预留参数"——
@@ -118,8 +180,7 @@ export class PetStage {
    * 因此"暂停"在这里落地为 `maxFPS = 1`：窗口已隐藏，每秒一次空转的开销
    * 可以忽略，但避免了"停掉 ticker"在恢复时可能引入的状态问题。
    *
-   * 另注：这个 setter 会重算 `_minElapsedMS`，所以**只在值真的变化时才写**，
-   * 否则每帧重写会不断推后帧计时基线。
+   * 另注：这个 setter 会重算 `_minElapsedMS`，所以**只在值真的变化时才写**。
    */
   setMaxFps(fps: number): void {
     if (fps === this.#appliedMaxFps) return
@@ -130,7 +191,6 @@ export class PetStage {
   /** 每帧更新。`dt` 单位是秒。 */
   update(dt: number): void {
     // 隐身时窗口已隐藏，做任何绘制都是纯浪费。
-    // （此时 ticker 已被压到 1fps，但 1fps 也仍是"每秒醒来一次"。）
     if (this.mode === 'hidden') return
 
     this.#elapsed += dt
@@ -144,10 +204,9 @@ export class PetStage {
     }
 
     this.#updateBlink(dt)
+    this.#updateGaze(dt)
     this.#updatePose()
   }
-
-  // ────────────────────────────── 动画 ──────────────────────────────
 
   #updateBlink(dt: number): void {
     if (this.#blink > 0) {
@@ -157,232 +216,328 @@ export class PetStage {
     this.#nextBlinkAt -= dt
     if (this.#nextBlinkAt <= 0) {
       this.#blink = BLINK_DURATION_SECONDS
-      // 随机间隔：固定节奏的眨眼看起来像机器。2.2–6.5s 接近真实小猫的频率。
-      this.#nextBlinkAt = 2.2 + Math.random() * 4.3
+      // 随机间隔：固定节奏的眨眼看起来像机器。2.4–7s 接近真实小猫的频率。
+      this.#nextBlinkAt = 2.4 + Math.random() * 4.6
+    }
+  }
+
+  /**
+   * 视线跟随：朝光标方向偏移瞳孔，并**做平滑**。
+   *
+   * 平滑是必需的：主进程约 80ms 推一次光标位置，
+   * 直接赋值会让瞳孔一顿一顿地跳。用与帧率无关的指数趋近。
+   */
+  #updateGaze(dt: number): void {
+    let target = { x: 0, y: 0 }
+
+    // 被点的时候不看光标——抬头看你，这比继续追光标更有回应感。
+    const interacting = this.#reactionRemaining > 0
+    if (this.#cursor && !interacting && this.mode === 'active') {
+      const c = this.#cursor
+      const centreX = (PET_FACE.eyeLeft.cx + PET_FACE.eyeRight.cx) / 2
+      const centreY = PET_FACE.eyeLeft.cy
+      target = gazeOffset(c.x, c.y, centreX, centreY, 3.6, 150)
+    }
+
+    // 指数趋近，半衰期约 0.12s；用 1-exp 保证与帧率无关。
+    const k = 1 - Math.exp(-dt / 0.12)
+    this.#gaze = {
+      x: this.#gaze.x + (target.x - this.#gaze.x) * k,
+      y: this.#gaze.y + (target.y - this.#gaze.y) * k,
     }
   }
 
   #updatePose(): void {
     const t = this.#elapsed
-    const { breath, squash, stretch, offsetY } = breathPose(t)
+    const { squash, stretch, offsetY } = breathPose(t)
     const sway = swayAngle(t)
 
     let scaleX = 1 + squash
     let scaleY = 1 + stretch
     let poseOffsetY = offsetY
-    let rootScale = 1
+    let rootScale = this.#scale
 
     if (this.mode === 'silent') {
       // 静默：缩成小点并慢速呼吸（CONTEXT.md：静默必须**仍然可见**，
       // 用户能看见它，因此知道它没崩）。
-      rootScale = 0.3
+      rootScale = this.#scale * 0.32
       const slow = Math.sin(t * ((Math.PI * 2) / 3.4))
       scaleX = 1 + slow * 0.06
       scaleY = 1 - slow * 0.06
       poseOffsetY = 0
     }
 
+    // 被点一下：一次下压回弹。用非对称包络（起手快、回落慢）才有重量感。
+    let bounce = 0
     if (this.#reactionRemaining > 0) {
-      // 被拍一下：一次快速的下压回弹（squash & stretch）。
       const progress = 1 - this.#reactionRemaining / REACTION_DURATION_SECONDS
-      // 0 → 1 → 0 的钟形曲线
-      const bump = Math.sin(progress * Math.PI)
-      scaleX = 1 + bump * 0.14
-      scaleY = 1 - bump * 0.14
-      poseOffsetY = bump * 5
+      bounce = bounceEnvelope(progress)
+      scaleX = 1 + bounce * 0.16
+      scaleY = 1 - bounce * 0.16
+      poseOffsetY = bounce * 6
     }
 
-    const b = PET_GEOMETRY.body
+    // 缩放的锚点在**身体底部中心**，所以宠物是"踩在地上"呼吸的，
+    // 而不是整体上下平移。这一步是初版最明显的观感缺陷之一。
+    const anchorX = PET_BODY.cx
+    const anchorY = PET_BODY.cy + PET_BODY.ry
+
+    // root 承担两件事：整体缩放（含静默态额外缩小）与居中。
+    // `rootScale` 已经是"绝对"缩放，居中偏移按窗口像素算：
+    //   窗口边长 = PET_DESIGN_SIZE × scale（由主进程按同一个 scale 设置）
+    //   宠物占用边长 = PET_DESIGN_SIZE × rootScale
+    const windowPx = PET_GEOMETRY.window.width * this.#scale
+    const contentPx = PET_GEOMETRY.window.width * rootScale
     this.#root.scale.set(rootScale)
-    this.#root.position.set(
-      ((1 - rootScale) * PET_GEOMETRY.window.width) / 2,
-      ((1 - rootScale) * PET_GEOMETRY.window.height) / 2,
-    )
+    this.#root.position.set((windowPx - contentPx) / 2, (windowPx - contentPx) / 2)
 
-    // 以身体底部中心为缩放锚点，这样呼吸时脚是"踩在地上"的。
-    this.#body.pivot.set(b.cx, b.cy + b.ry)
-    this.#body.position.set(b.cx, b.cy + b.ry)
-    this.#body.scale.set(scaleX, scaleY)
-    this.#body.rotation = sway
-
-    this.#ears.pivot.set(b.cx, b.cy + b.ry)
-    this.#ears.position.set(b.cx + poseOffsetY * 0.35, b.cy + b.ry)
-    this.#ears.scale.set(scaleX + 0.02, scaleY + 0.02)
-    this.#ears.rotation = sway
-
-    this.#tail.pivot.set(b.cx, b.cy + b.ry)
-    this.#tail.position.set(b.cx + poseOffsetY * 0.2, b.cy + b.ry)
-    this.#tail.scale.set(scaleX, scaleY)
-    // 尾巴摆动幅度略大于身体，产生"甩尾"的次级动作。
-    this.#tail.rotation = sway * 3.2 + Math.sin(t * 1.7) * 0.05
-
-    this.#cheeks.pivot.set(b.cx, b.cy + b.ry)
-    this.#cheeks.position.set(b.cx, b.cy + b.ry)
-    this.#cheeks.scale.set(scaleX, scaleY)
-
-    // 眼睛：位置跟随身体的呼吸位移，但**不跟随形变**。
-    //
-    // Graphics 的局部原点就在眼心（形状画在 (0,0)，见 `#drawEyes()`），
-    // 所以 `position` 直接等于眼睛坐标，`scale.y` 就是眨眼开合度，
-    // 且缩放天然以眼心为锚点——不需要 pivot，也就绕开了 Pixi 的
-    // "position 被 pivot 偏移"那个坑。
-    for (const [graphics, eye] of [
-      [this.#eyeLeftGraphics, PET_FACE.eyeLeft],
-      [this.#eyeRightGraphics, PET_FACE.eyeRight],
-    ] as const) {
-      graphics.position.set(eye.cx, eye.cy + poseOffsetY)
+    /** 统一的"随呼吸形变"变换：以底部中心为锚点缩放并轻微旋转。 */
+    const applyBodyLike = (g: Graphics, extraScale = 0, rotation = sway): void => {
+      g.pivot.set(anchorX, anchorY)
+      g.position.set(anchorX, anchorY)
+      g.scale.set(scaleX + extraScale, scaleY + extraScale)
+      g.rotation = rotation
     }
 
-    const openness = this.mode === 'silent' ? 0.1 : eyeOpenness(this.#blink, BLINK_DURATION_SECONDS)
-    this.#eyeLeftGraphics.scale.set(1, openness)
-    this.#eyeRightGraphics.scale.set(1, openness)
+    applyBodyLike(this.#body)
+    applyBodyLike(this.#ears, 0.02, sway + earSecondarySway(t))
+    applyBodyLike(this.#tail, 0, sway * 0.6 + tailSway(t))
+    applyBodyLike(this.#blush)
+    applyBodyLike(this.#mouth)
 
-    // 影子随呼吸轻微收缩，强化"有重量"的感觉。
-    this.#shadow.scale.set(scaleX, 1)
-    this.#shadow.alpha = 0.16 - breath * 0.02
+    // 影子：横向随呼吸轻微伸缩，透明度随身体升高而变淡（离地感）。
+    this.#shadow.pivot.set(PET_FACE.shadow.cx, PET_FACE.shadow.cy)
+    this.#shadow.position.set(PET_FACE.shadow.cx, PET_FACE.shadow.cy)
+    this.#shadow.scale.set(scaleX * (1 + bounce * 0.08), 1)
+
+    // 眼睛：位置跟随身体的呼吸位移，**不跟随形变**（压扁的眼睛很怪）。
+    this.#drawEyesDynamic(poseOffsetY, bounce)
   }
 
   // ────────────────────────────── 绘制 ──────────────────────────────
 
   #drawShadow(): void {
     const s = PET_FACE.shadow
-    this.#shadow.ellipse(s.cx, s.cy, s.rx, s.ry).fill({
+    // 两层：外圈更淡更大，形成软边。纯色椭圆会显得像贴纸。
+    this.#shadow.ellipse(s.cx, s.cy, s.rx * 1.18, s.ry * 1.5).fill({
       color: PET_PALETTE.shadow,
-      alpha: 1,
+      alpha: 0.07,
     })
+    this.#shadow.ellipse(s.cx, s.cy, s.rx, s.ry).fill({ color: PET_PALETTE.shadow, alpha: 0.13 })
   }
 
+  /**
+   * 尾巴：一个**明确分离**的圆角尖椭圆，只从身体后面探出来一点。
+   *
+   * 形状与位置的取舍见 `TAIL_SHAPE` 的注释（这条尾巴试了五版）。
+   * 绘制顺序上它在身体**之下**，所以与身体重叠的部分被盖住，
+   * 露出来的只有尖端——轮廓连通（施工令 §4.3③）由这段重叠保证。
+   */
   #drawTail(): void {
-    const t = PET_GEOMETRY.tailTip
-    // 先描边后填充：两遍绘制同一形状，得到有描边的实心圆。
-    this.#tail.circle(t.cx, t.cy, t.r).fill(PET_PALETTE.body)
-    this.#tail.circle(t.cx, t.cy, t.r).stroke({ color: PET_PALETTE.outline, width: 3 })
+    const b = PET_BODY
+    const cx = b.cx + b.rx * TAIL_SHAPE.offset.x
+    const cy = b.cy + b.ry * TAIL_SHAPE.offset.y
+    const { rx, ry, rotation } = TAIL_SHAPE
+
+    // 用旋转后的椭圆：直接在椭圆上做旋转需要变换，这里改用 Graphics 的
+    // 局部旋转会牵动整个图层（#tail 还要参与呼吸摆动），
+    // 所以宁可手算一个旋转后的椭圆多边形。
+    const cos = Math.cos(rotation)
+    const sin = Math.sin(rotation)
+    const STEPS = 28
+    const path = (): Graphics => {
+      const g = this.#tail
+      for (let i = 0; i <= STEPS; i++) {
+        const a = (i / STEPS) * Math.PI * 2
+        const ex = Math.cos(a) * rx
+        const ey = Math.sin(a) * ry
+        const px = cx + ex * cos - ey * sin
+        const py = cy + ex * sin + ey * cos
+        if (i === 0) g.moveTo(px, py)
+        else g.lineTo(px, py)
+      }
+      return g.closePath()
+    }
+
+    path().fill(PET_PALETTE.bodyBottom)
+    path().stroke({ color: PET_PALETTE.ink, width: PET_STROKE_WIDTH })
   }
 
+  /**
+   * 耳朵：**圆角三角**，不是圆。
+   *
+   * 圆耳 + 圆身读起来像老鼠/熊（初版实测）。把耳朵做成向上收尖的圆角三角，
+   * 立刻读出"猫/狐"那一类。尖顶用一段短贝塞尔收圆，避免真的尖角
+   * （尖角在低分辨率下会有明显的锯齿感）。
+   *
+   * 耳朵与身体相交保证轮廓连通。绘制顺序上身体在后，所以耳朵根部被压住，
+   * 看起来是"长出来的"而不是"贴上去的"。
+   */
   #drawEars(): void {
     for (const ear of [PET_GEOMETRY.earLeft, PET_GEOMETRY.earRight]) {
-      this.#ears.circle(ear.cx, ear.cy, ear.r).fill(PET_PALETTE.body)
-      this.#ears.circle(ear.cx, ear.cy, ear.r).stroke({ color: PET_PALETTE.outline, width: 3 })
-      // 耳廓：内侧一小圈暖色，让耳朵不是两个死板的圆。
+      const { cx, cy, r } = ear
+      // 外耳：从底部两角收到顶部一点
+      const path = (): Graphics =>
+        this.#ears
+          .moveTo(cx - r * 0.92, cy + r * 0.55)
+          .quadraticCurveTo(cx - r * 0.78, cy - r * 0.85, cx, cy - r * 1.0)
+          .quadraticCurveTo(cx + r * 0.78, cy - r * 0.85, cx + r * 0.92, cy + r * 0.55)
+          .closePath()
+
+      path().fill(PET_PALETTE.bodyTop)
+      path().stroke({ color: PET_PALETTE.ink, width: PET_STROKE_WIDTH })
+
+      // 内耳：同形但缩小并下移，露出一圈描边宽度
+      const inner = r * 0.5
       this.#ears
-        .circle(ear.cx, ear.cy + 1, ear.r * 0.45)
-        .fill({ color: PET_PALETTE.cheek, alpha: 0.55 })
-    }
-  }
-
-  #drawBody(): void {
-    const b = PET_GEOMETRY.body
-    this.#body.ellipse(b.cx, b.cy, b.rx, b.ry).fill(PET_PALETTE.body)
-    this.#body.ellipse(b.cx, b.cy, b.rx, b.ry).stroke({ color: PET_PALETTE.outline, width: 3 })
-  }
-
-  #drawCheeks(): void {
-    for (const cheek of [PET_FACE.cheekLeft, PET_FACE.cheekRight]) {
-      this.#cheeks
-        .ellipse(cheek.cx, cheek.cy, cheek.rx, cheek.ry)
-        .fill({ color: PET_PALETTE.cheek, alpha: 0.5 })
-    }
-  }
-
-  #drawEyes(): void {
-    // ★ 眼睛的写法（含一次代价很高的排查，改之前请读完）★
-    //
-    // 做法：形状画在 `Graphics` 的**局部原点 (0,0)**，再把整个 Graphics
-    // 平移到眼睛坐标。这样"Graphics 原点 = 眼睛中心 = 缩放锚点"三者重合，
-    // 眨眼时按 y 缩放就是以眼心为锚点压扁，**完全不需要 pivot**。
-    //
-    // ⚠️ 不要把眼睛放进一层中间 `Container` 再靠 `pivot`/`position` 定位。
-    //    这里记录**两条确实被量到的事实**，以及一条**我没有定论**的观察。
-    //
-    //    【事实 1｜可直接复现】Pixi v8 的 `position` 是**被 `pivot` 偏移过的**：
-    //          pivot=(0,0)    position=(100,120) → worldTransform.tx=100, ty=120  ✅
-    //          pivot=(100,60) position=(100,60)  → worldTransform.tx=0,   ty=0    ❌
-    //      即 `pivot == position` 会把内容画到**父容器原点**。
-    //      这是在受控最小复现里量出来的，与下面的观察无关，独立成立。
-    //
-    //    【观察｜结论存疑】当时把两只眼睛各包一层 `Container`（pivot 设 (0,0)、
-    //      position 设眼睛坐标）后，看到的现象是眼睛**一个像素都不画**，
-    //      且不报任何错：canvas 正常、`visible`/`renderable` 全为 true、
-    //      `getLocalBounds()` 与 `worldTransform` 都"看起来正确"（tx=90, ty=133）。
-    //
-    //      ⚠️ **但这条观察后来被发现有混淆因素**：同一个 `useEffect` 里还有一个
-    //      真实的 bug —— React 19 StrictMode 会挂载两次，而当时
-    //      `window.__petDebug` 钩子可能仍指向**已被销毁的第一个 Application**。
-    //      那个已销毁实例的场景图恰好也"看起来完全正常"。
-    //      所以我**无法确定**当年的"不渲染"是容器路径本身的问题，
-    //      还是读到了死实例的快照。根因**未定位**，不要引用为"容器有 bug"。
-    //
-    //    当前写法（不套容器、不用 pivot）依然保留，理由只剩一条且足够：
-    //    它让"容器原点 = 眼睛中心 = 缩放锚点"三者重合，绕开了【事实 1】，
-    //    同时满足眨眼需求，且比多一层容器更少间接。
-    for (const [graphics, eye] of [
-      [this.#eyeLeftGraphics, PET_FACE.eyeLeft],
-      [this.#eyeRightGraphics, PET_FACE.eyeRight],
-    ] as const) {
-      graphics.circle(0, 0, eye.r).fill(PET_PALETTE.eye)
-      // 高光：让眼睛看起来"有神"。偏右上，是通行的卡通打光方向。
-      graphics
-        .circle(eye.r * 0.32, -eye.r * 0.34, eye.r * 0.3)
-        .fill({ color: 0xffffff, alpha: 0.9 })
-      graphics.position.set(eye.cx, eye.cy)
+        .moveTo(cx - inner * 0.9, cy + r * 0.3)
+        .quadraticCurveTo(cx - inner * 0.7, cy - inner * 0.8, cx, cy - inner * 0.92)
+        .quadraticCurveTo(cx + inner * 0.7, cy - inner * 0.8, cx + inner * 0.9, cy + r * 0.3)
+        .closePath()
+        .fill({ color: PET_PALETTE.earInner, alpha: 0.75 })
     }
   }
 
   /**
-   * 诊断：单独开关某个图层。
+   * 身体：蛋形 + **自上而下的渐变**。
    *
-   * 用来回答"某个图层到底有没有被画到屏幕上"——把其他图层关掉再看，
-   * 就能排除遮挡/层级判断的干扰。只在诊断时用，不参与正常运行。
+   * 渐变是"从平涂变成有体积"的最小改动，性价比最高：
+   * 上半受光（浅）、下半落影（深），立刻从"色块"变成"有厚度的东西"。
+   * 全局光源统一在**右上方**，与眼睛高光、影子方向一致。
+   *
+   * ⚠️ 用**选项对象**构造 `FillGradient`。位置参数那个重载
+   *    （`new FillGradient(x0, y0, x1, y1)`）在 8.5.2 起已废弃，
+   *    lint 会以 `no-deprecated` 拦下——这不是风格问题，是 API 迁移。
    */
-  debugSetLayerVisible(
-    layer: 'body' | 'ears' | 'tail' | 'cheeks' | 'eyes' | 'shadow',
-    visible: boolean,
-  ): void {
-    switch (layer) {
-      case 'body':
-        this.#body.visible = visible
-        break
-      case 'ears':
-        this.#ears.visible = visible
-        break
-      case 'tail':
-        this.#tail.visible = visible
-        break
-      case 'cheeks':
-        this.#cheeks.visible = visible
-        break
-      case 'eyes':
-        this.#eyeLeftGraphics.visible = visible
-        this.#eyeRightGraphics.visible = visible
-        break
-      case 'shadow':
-        this.#shadow.visible = visible
-        break
+  #drawBody(): void {
+    const b = PET_BODY
+    // 局部纹理空间（0..1 相对绘制对象的边界框），与 Pixi 的默认一致。
+    const gradient = new FillGradient({
+      type: 'linear',
+      start: { x: 0, y: 0 },
+      end: { x: 0, y: 1 },
+      colorStops: [
+        { offset: 0, color: PET_PALETTE.bodyTop },
+        { offset: 0.58, color: PET_PALETTE.bodyTop },
+        { offset: 1, color: PET_PALETTE.bodyBottom },
+      ],
+    })
+
+    this.#body.ellipse(b.cx, b.cy, b.rx, b.ry).fill(gradient)
+    this.#body
+      .ellipse(b.cx, b.cy, b.rx, b.ry)
+      .stroke({ color: PET_PALETTE.ink, width: PET_STROKE_WIDTH })
+  }
+
+  #drawBlush(): void {
+    for (const blush of [PET_FACE.blushLeft, PET_FACE.blushRight]) {
+      this.#blush
+        .ellipse(blush.cx, blush.cy, blush.rx, blush.ry)
+        .fill({ color: PET_PALETTE.blush, alpha: 0.5 })
     }
   }
 
-  /** 形态。由外部按主进程推送的状态设置。 */
-  mode: 'active' | 'silent' | 'hidden' = 'active'
+  /** 嘴：一条极短的微笑下弧。 */
+  #drawMouth(): void {
+    const m = PET_FACE.mouth
+    this.#mouth
+      .moveTo(m.cx - m.halfWidth, m.cy)
+      .quadraticCurveTo(m.cx, m.cy + m.drop, m.cx + m.halfWidth, m.cy)
+      .stroke({
+        color: PET_PALETTE.ink,
+        width: m.strokeWidth,
+        cap: 'round',
+      })
+  }
+
+  /**
+   * 眼睛的**静态**部分：虹膜、瞳孔、高光。
+   *
+   * 全部画在一个 Graphics 里，每帧重绘（`#drawEyesDynamic`）——
+   * 因为瞳孔要跟着光标动、眨眼要改形状，静态画一次是不够的。
+   * 这个角色的绘制量很小（几个椭圆），重绘成本可以忽略。
+   */
+  #drawEyes(): void {
+    this.#drawEyesDynamic(0, 0)
+  }
+
+  /**
+   * 每帧重绘眼睛。
+   *
+   * ⚠️ 这里刻意**不用中间 `Container`、也不用 `pivot`**，而是每帧重画。
+   *    两个原因：
+   *    ① Pixi v8 的 `position` 会被 `pivot` 偏移，`pivot == position`
+   *       会把内容画到父容器原点（受控最小复现里量过）。
+   *    ② 本轮排查"眼睛不渲染"时发现一个会污染诊断的 bug：
+   *       StrictMode 下 `window.__petDebug` 可能指向**已被销毁的实例**，
+   *       而那个死实例的场景图"看起来完全正常"。
+   *    改成"每帧按当前状态直接画"之后，绘制结果只取决于这一帧的输入，
+   *    不依赖任何跨帧的容器状态，这类问题从结构上就不存在了。
+   *
+   * 眯眼（被点时）用**画成弧线**而不是压扁椭圆：
+   * 压扁只是"变小"，弧线才是"笑"。
+   */
+  #drawEyesDynamic(offsetY: number, bounce: number): void {
+    const g = this.#eyes
+    g.clear()
+
+    const openness = this.mode === 'silent' ? 0.12 : eyeOpenness(this.#blink, BLINK_DURATION_SECONDS)
+    const happy = bounce > 0.25
+
+    for (const eye of [PET_FACE.eyeLeft, PET_FACE.eyeRight]) {
+      const cx = eye.cx
+      const cy = eye.cy + offsetY
+
+      if (happy) {
+        // 笑眼：一段上凸的弧线
+        g.moveTo(cx - eye.rx, cy + 1)
+          .quadraticCurveTo(cx, cy - eye.ry * 0.85, cx + eye.rx, cy + 1)
+          .stroke({ color: PET_PALETTE.ink, width: 2.6, cap: 'round' })
+        continue
+      }
+
+      // 眼形：竖椭圆，按 openness 压扁（眨眼）
+      const ry = Math.max(0.6, eye.ry * openness)
+      g.ellipse(cx, cy, eye.rx, ry).fill(PET_PALETTE.eye)
+
+      // 瞳孔 + 高光只在没闭眼时画（闭着时画高光会露出缝隙里的白点）
+      if (openness > 0.35) {
+        const px = cx + this.#gaze.x
+        const py = cy + this.#gaze.y
+        g.circle(px, py, PET_FACE.pupilR * Math.min(1, openness + 0.2)).fill(PET_PALETTE.pupil)
+
+        // 主高光（右上）——与全局光源方向一致
+        g.circle(
+          px + PET_FACE.catchlightOffset.x,
+          py + PET_FACE.catchlightOffset.y,
+          PET_FACE.catchlightR,
+        ).fill({ color: PET_PALETTE.catchlight, alpha: 0.95 })
+        // 次级高光（左下）——让眼睛像玻璃珠而不是贴了两块白
+        g.circle(
+          px + PET_FACE.catchlight2Offset.x,
+          py + PET_FACE.catchlight2Offset.y,
+          PET_FACE.catchlight2R,
+        ).fill({ color: PET_PALETTE.catchlight, alpha: 0.5 })
+      }
+    }
+  }
 
   /**
    * 诊断快照 —— 通过 `window.__petDebug` 暴露（只读投影，不改变行为）。
    *
    * 本机没法在渲染进程里开 DevTools 调试（一开透明窗就不透明），
    * 所以"某个图层为什么没画出来"这类问题只能靠把内部状态读出来判断。
-   * 排查眼睛不渲染那次，这些字段是把范围从"整段渲染管线"缩到
-   * "就是眼睛那块"的关键。
    */
   debugSnapshot(): Record<string, unknown> {
-    const describe = (container: Container): Record<string, unknown> => {
-      const bounds = container.getLocalBounds()
+    const describe = (g: Graphics): Record<string, unknown> => {
+      const bounds = g.getLocalBounds()
       return {
-        visible: container.visible,
-        alpha: container.alpha,
-        x: Math.round(container.x * 100) / 100,
-        y: Math.round(container.y * 100) / 100,
-        scaleX: Math.round(container.scale.x * 1000) / 1000,
-        scaleY: Math.round(container.scale.y * 1000) / 1000,
-        localBounds: {
+        visible: g.visible,
+        renderable: g.renderable,
+        alpha: Math.round(g.alpha * 100) / 100,
+        position: { x: Math.round(g.x), y: Math.round(g.y) },
+        scale: { x: Math.round(g.scale.x * 1000) / 1000, y: Math.round(g.scale.y * 1000) / 1000 },
+        bounds: {
           x: Math.round(bounds.x),
           y: Math.round(bounds.y),
           w: Math.round(bounds.width),
@@ -392,21 +547,39 @@ export class PetStage {
     }
 
     return {
+      mode: this.mode,
+      scale: this.#scale,
       rootVisible: this.#root.visible,
       rootChildren: this.#root.children.length,
-      // 动画的实时内部量：判断"眼睛没画出来"是几何问题还是动画问题
-      // （例如误判成一直在眨眼）必须看这几个值。
       animation: {
         elapsed: Math.round(this.#elapsed * 100) / 100,
         blinkRemaining: Math.round(this.#blink * 1000) / 1000,
         nextBlinkAt: Math.round(this.#nextBlinkAt * 100) / 100,
         reactionRemaining: Math.round(this.#reactionRemaining * 1000) / 1000,
       },
-      mode: this.mode,
+      gaze: { x: Math.round(this.#gaze.x * 100) / 100, y: Math.round(this.#gaze.y * 100) / 100 },
       body: describe(this.#body),
       ears: describe(this.#ears),
-      eyesLeft: describe(this.#eyeLeftGraphics),
-      eyesRight: describe(this.#eyeRightGraphics),
+      tail: describe(this.#tail),
+      eyes: describe(this.#eyes),
     }
+  }
+
+  /**
+   * 诊断：单独开关某个图层（用于分层截图定位"哪一层没画"）。
+   * 只在诊断时用，不参与正常运行。
+   */
+  debugSetLayerVisible(layer: string, visible: boolean): void {
+    const map: Record<string, Graphics> = {
+      body: this.#body,
+      ears: this.#ears,
+      tail: this.#tail,
+      blush: this.#blush,
+      mouth: this.#mouth,
+      eyes: this.#eyes,
+      shadow: this.#shadow,
+    }
+    const target = map[layer]
+    if (target) target.visible = visible
   }
 }

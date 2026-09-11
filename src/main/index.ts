@@ -3,11 +3,12 @@ import { join } from 'node:path'
 import { type BrowserWindow, Menu, Tray, app, globalShortcut, ipcMain, nativeImage } from 'electron'
 
 import { describeUserNotificationState } from '@shared/geometry'
+import { PET_SCALE_DEFAULT, PET_SCALE_STEPS } from '@shared/constants'
 import { IPC } from '@shared/ipc'
 import type { PetRuntimeState, VisibilityMode } from '@shared/types'
 
 import { targetFrameRate } from './core/frameRate'
-import { evidenceDir, runEvidenceCapture } from './evidence'
+import { evidenceDir, runEvidenceCapture, runResizeTest } from './evidence'
 import { selfCheckPlatform } from './platform'
 import { win32Platform } from './platform/win32'
 import { createPetWindow, resolveRendererEntry, trayIconPath } from './window/createPetWindow'
@@ -73,6 +74,9 @@ function runtimeState(): PetRuntimeState {
     cursorRoute: controller.cursorRoute,
     workArea: controller.currentWorkArea(),
     frameRate: targetFrameRate(controller.frameBudgetSnapshot),
+    scale: controller.scale,
+    // 视线跟随用的光标位置（设计空间坐标）。够远时为 null，眼睛回正。
+    cursor: controller.cursorInDesignSpace(),
   }
 }
 
@@ -129,6 +133,20 @@ function refreshTrayMenu(): void {
       click: () => {
         controller?.placeAtDefaultPosition()
       },
+    },
+    {
+      // 大小做成**档位**而不是滑块：托盘菜单里滑块不好用（拖动体验差、
+      // 无法显示当前档），而档位一眼看得出选中的是哪个。
+      label: '大小',
+      submenu: PET_SCALE_STEPS.map((step) => ({
+        label: step === 1 ? `${String(Math.round(step * 100))}%（默认）` : `${String(Math.round(step * 100))}%`,
+        type: 'radio' as const,
+        checked: Math.abs((controller?.scale ?? 1) - step) < 0.001,
+        click: () => {
+          controller?.setScale(step)
+          refreshTrayMenu()
+        },
+      })),
     },
     { type: 'separator' },
     {
@@ -209,6 +227,17 @@ function registerIpc(): void {
     return runtimeState()
   })
 
+  ipcMain.handle(IPC.scaleSet, (_event, raw: unknown) => {
+    const scale = Number(raw)
+    if (!Number.isFinite(scale) || scale <= 0) {
+      throw new Error(`非法的缩放值：${String(raw)}`)
+    }
+    log(`渲染进程请求缩放 → ${String(scale)}`)
+    controller?.setScale(scale)
+    refreshTrayMenu()
+    return runtimeState()
+  })
+
   ipcMain.on(IPC.petInteract, () => {
     log('用户点了宠物')
     // M1 没有业务逻辑：这里只记录互动。M2 起接入状态机。
@@ -229,6 +258,31 @@ function registerIpc(): void {
   })
 }
 
+/**
+ * 缩放透明度实测（仅当 `XIAOQI_RESIZE_TEST=<缩放倍数>` 时启用）。
+ *
+ * 用来回答一个规格里没有答案的问题：**运行期用 `setBounds` 改一个
+ * `transparent` 窗口的尺寸，会不会破坏透明？**
+ * 这是"宠物可缩放"能否用方案 B（真改窗口尺寸）的前提。
+ */
+async function runResizeTestIfRequested(): Promise<void> {
+  const raw = process.env.XIAOQI_RESIZE_TEST
+  if (!raw || !petWindow) return
+
+  const scale = Number(raw)
+  if (!Number.isFinite(scale) || scale <= 0) return
+
+  log(`开始缩放实测：scale=${String(scale)}`)
+  try {
+    const lines = await runResizeTest(petWindow, scale)
+    for (const line of lines) log(`  ${line}`)
+  } catch (error) {
+    log(`⚠️ 缩放实测失败：${String(error)}`)
+  }
+
+  if (!process.env.XIAOQI_KEEP_OPEN_MS) app.quit()
+}
+
 function bootstrap(): void {
   // 先跑平台层冒烟自检。原生 FFI 的库名/函数名写错会在模块求值期就崩，
   // 而报错不会告诉你"库名写错了"——所以这里主动调用一次并把结果喊出来。
@@ -245,7 +299,7 @@ function bootstrap(): void {
   //    而报错会出现在渲染进程里一个看起来无关的地方。
   const preloadPath = join(__dirname, '../preload/index.cjs')
 
-  petWindow = createPetWindow({ preloadPath })
+  petWindow = createPetWindow({ preloadPath, scale: PET_SCALE_DEFAULT })
   controller = new PetWindowController({
     window: petWindow,
     platform: win32Platform,
@@ -283,7 +337,10 @@ function bootstrap(): void {
       log(`⚠️ preload 加载失败：${preloadPath} → ${error.message}`)
     })
 
-    void runEvidenceIfRequested()
+    // 先跑缩放实测，再跑常规取证。
+    // ⚠️ 顺序很重要：缩放实测结束后要把窗口恢复原尺寸，否则常规取证的
+    //    "保护关闭"那张会拍到已经缩放过的窗口，两张图不可比。
+    void runResizeTestIfRequested().then(() => runEvidenceIfRequested())
     scheduleKeepOpen()
   })
 

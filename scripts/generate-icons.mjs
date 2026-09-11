@@ -48,24 +48,51 @@ const rootDir = join(dirname(fileURLToPath(import.meta.url)), '..')
 const DESIGN_SIZE = 220
 
 const GEOMETRY = {
-  body: { cx: 110, cy: 138, rx: 56, ry: 60 },
-  earLeft: { cx: 80, cy: 86, r: 20 },
-  earRight: { cx: 140, cy: 86, r: 20 },
-  tailTip: { cx: 172, cy: 166, r: 18 },
+  body: { cx: 110, cy: 139, rx: 53, ry: 59 },
+  earLeft: { cx: 84, cy: 90, r: 19 },
+  earRight: { cx: 136, cy: 90, r: 19 },
+  // 尾巴只用于核对（宠物本体把它画成"从身后探出的尖椭圆"，
+  // 在托盘图标的 16px 尺度上根本看不见，所以图标里不画它）。
+  // 保留在核对表里是为了：改尾巴位置时这里会立刻报错，提醒同步。
+  tailTip: { cx: 186, cy: 186, r: 16 },
 }
 
-/** 眼睛位置与大小不在 PET_GEOMETRY 里（命中测试不需要它们），此处自行定义。 */
+/**
+ * 图标里**不绘制**尾巴。
+ *
+ * 原因：尾巴是从身体后面探出的一个小尖椭圆，在 16–32px 的托盘尺度上
+ * 只会变成体侧一个模糊的凸起，反而破坏剪影的干净。
+ * 托盘图标要的是"一眼认出是它"，不是"细节齐全"。
+ */
+const DRAW_TAIL_IN_ICON = false
+
+/**
+ * 眼睛与腮红的位置。
+ *
+ * ⚠️ 这两组必须与 `src/shared/palette.ts` 的 `PET_FACE` **保持一致**：
+ *    图标得看起来像那只宠物，否则托盘图标就成了一块无关的图形。
+ *    它们不做自动核对（`PET_FACE` 不在 PET_GEOMETRY 里、正则也不好取），
+ *    所以改宠物五官时**记得回来同步这里**——这一步漏了不会有任何报错。
+ */
 const EYES = {
-  left: { cx: 90, cy: 134, r: 9 },
-  right: { cx: 130, cy: 134, r: 9 },
+  left: { cx: 91, cy: 136, r: 10.5 },
+  right: { cx: 129, cy: 136, r: 10.5 },
 }
 
-/** 设计用色：与渲染进程 PixiJS 那边保持同一套。 */
+const CHEEKS = {
+  left: { cx: 71, cy: 154, rx: 9.5, ry: 6 },
+  right: { cx: 149, cy: 154, rx: 9.5, ry: 6 },
+}
+
+/** 设计用色：与渲染进程 PixiJS 那边（`src/shared/palette.ts`）同一套。 */
 const PALETTE = {
-  body: [255, 244, 214],
-  outline: [90, 70, 50],
-  eye: [58, 44, 32],
-  cheek: [255, 176, 168],
+  bodyTop: [232, 238, 245],
+  bodyBottom: [185, 199, 217],
+  outline: [47, 58, 77],
+  eye: [58, 36, 22],
+  iris: [217, 138, 63],
+  catchlight: [255, 255, 255],
+  cheek: [232, 154, 154],
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -84,13 +111,71 @@ function inCircle(x, y, c) {
   return dx * dx + dy * dy <= c.r * c.r
 }
 
-/** 宠物整体轮廓（身体 ∪ 双耳 ∪ 尾巴）。 */
+/**
+ * 尖耳的轮廓，用**与宠物本体完全相同的二次贝塞尔**描述。
+ *
+ * `PET_GEOMETRY.earLeft/earRight` 存的是**圆**（命中测试用，圆最快也够准），
+ * 但视觉上是圆角三角。图标必须与本体同形，否则托盘图标看着像另一个角色。
+ *
+ * 关键做法：这里不"近似"那条曲线，而是**采样真实曲线**再做点在多边形内判定。
+ * 用直线多边形近似会在小尺寸下露出折角（试过，图标上的耳朵是方的）。
+ */
+function earPath(ear, scale = 1) {
+  const { cx, cy, r } = ear
+  /** 把比例坐标缩放到目标尺寸。 */
+  const at = (dx, dy) => ({ x: cx + dx * r * scale, y: cy + dy * r * scale })
+
+  // 与 PetStage#drawEars 的四段一致
+  const p0 = at(-0.92, 0.55)
+  const c0 = at(-0.78, -0.85)
+  const p1 = at(0, -1.0)
+  const c1 = at(0.78, -0.85)
+  const p2 = at(0.92, 0.55)
+
+  const points = [p0]
+  const STEPS = 12
+  // 两段二次贝塞尔：p0 →(c0) p1，p1 →(c1) p2
+  for (const [from, ctrl, to] of [
+    [p0, c0, p1],
+    [p1, c1, p2],
+  ]) {
+    for (let i = 1; i <= STEPS; i++) {
+      const u = i / STEPS
+      const inv = 1 - u
+      points.push({
+        x: inv * inv * from.x + 2 * inv * u * ctrl.x + u * u * to.x,
+        y: inv * inv * from.y + 2 * inv * u * ctrl.y + u * u * to.y,
+      })
+    }
+  }
+  return points
+}
+
+/** 射线法判断点是否在多边形内。 */
+function inPolygon(x, y, points) {
+  let inside = false
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const a = points[i]
+    const b = points[j]
+    if (a.y > y !== b.y > y && x < ((b.x - a.x) * (y - a.y)) / (b.y - a.y) + a.x) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+/** 耳朵是否命中。`scale < 1` 得到内耳（同形而缩小）。 */
+function inEar(x, y, ear, scale = 1) {
+  return inPolygon(x, y, earPath(ear, scale))
+}
+
+/** 宠物整体轮廓（身体 ∪ 双耳尖角 ∪ 尾巴）。 */
 function inSilhouette(x, y) {
   return (
     inEllipse(x, y, GEOMETRY.body) ||
-    inCircle(x, y, GEOMETRY.earLeft) ||
-    inCircle(x, y, GEOMETRY.earRight) ||
-    inCircle(x, y, GEOMETRY.tailTip)
+    inEar(x, y, GEOMETRY.earLeft) ||
+    inEar(x, y, GEOMETRY.earRight) ||
+    (DRAW_TAIL_IN_ICON && inCircle(x, y, GEOMETRY.tailTip))
   )
 }
 
@@ -103,9 +188,10 @@ function inInner(x, y, inset) {
       rx: GEOMETRY.body.rx - inset,
       ry: GEOMETRY.body.ry - inset,
     }) ||
-    inCircle(x, y, { ...GEOMETRY.earLeft, r: GEOMETRY.earLeft.r - inset }) ||
-    inCircle(x, y, { ...GEOMETRY.earRight, r: GEOMETRY.earRight.r - inset }) ||
-    inCircle(x, y, { ...GEOMETRY.tailTip, r: GEOMETRY.tailTip.r - inset })
+    // 耳朵用按比例缩小来近似"内缩"，尖角的偏移没法用统一 inset 表达
+    inEar(x, y, GEOMETRY.earLeft, 1 - inset / GEOMETRY.earLeft.r) ||
+    inEar(x, y, GEOMETRY.earRight, 1 - inset / GEOMETRY.earRight.r) ||
+    (DRAW_TAIL_IN_ICON && inCircle(x, y, { ...GEOMETRY.tailTip, r: GEOMETRY.tailTip.r - inset }))
   )
 }
 
@@ -168,15 +254,37 @@ const OUTLINE_WIDTH = 1.8
 
 /** 返回该设计坐标点的颜色；`null` = 透明。 */
 function sampleColor(x, y) {
-  // 眼睛在最上层
-  if (inCircle(x, y, EYES.left) || inCircle(x, y, EYES.right)) return PALETTE.eye
+  // 五官在最上层（与渲染进程的图层顺序一致：身体 → 腮红 → 眼睛）
+  for (const eye of [EYES.left, EYES.right]) {
+    // 虹膜（琥珀）在外，瞳孔（深棕）在内，再点一个高光——
+    // 与宠物本体同一套画法，托盘图标才不会看起来像另一个角色。
+    if (inCircle(x, y, { cx: eye.cx + 1.2, cy: eye.cy + 1.0, r: eye.r * 0.42 })) return PALETTE.eye
+    if (inCircle(x, y, { cx: eye.cx + 3.2, cy: eye.cy - 3.8, r: eye.r * 0.22 })) {
+      return PALETTE.catchlight
+    }
+    if (inCircle(x, y, eye)) return PALETTE.iris
+  }
 
   if (!inSilhouette(x, y)) return null
 
   // 描边 = 轮廓内、但不在"向内收 OUTLINE_WIDTH"的轮廓内
   if (!inInner(x, y, OUTLINE_WIDTH)) return PALETTE.outline
 
-  return PALETTE.body
+  // 腮红：只在身体上，且要在眼睛下方
+  for (const cheek of [CHEEKS.left, CHEEKS.right]) {
+    if (inEllipse(x, y, cheek)) return PALETTE.cheek
+  }
+
+  // 身体：自上而下的渐变（与 PixiJS 那边的 FillGradient 一致）
+  const body = GEOMETRY.body
+  const t = Math.min(1, Math.max(0, (y - (body.cy - body.ry)) / (body.ry * 2)))
+  // 与渲染一致：0 到 0.58 保持顶部色，之后过渡到底部色
+  const k = t <= 0.58 ? 0 : (t - 0.58) / 0.42
+  return [
+    Math.round(PALETTE.bodyTop[0] + (PALETTE.bodyBottom[0] - PALETTE.bodyTop[0]) * k),
+    Math.round(PALETTE.bodyTop[1] + (PALETTE.bodyBottom[1] - PALETTE.bodyTop[1]) * k),
+    Math.round(PALETTE.bodyTop[2] + (PALETTE.bodyBottom[2] - PALETTE.bodyTop[2]) * k),
+  ]
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -271,7 +379,12 @@ function assertGeometryInSync() {
 
   const problems = []
   for (const [shape, field, expected] of expectations) {
-    const pattern = new RegExp(`${shape}:\\s*\\{[^}]*${field}:\\s*(-?[\\d.]+)`, 's')
+    // ⚠️ 用 `[^{}]*` 而不是 `[^}]*`：后者会**跨过形状边界**，
+    //    于是 `tailTip` 的 `cx` 会匹配到文件里第一个 `cx`（也就是 body 的），
+    //    核对结果碰巧通过、却完全没在核对它以为在核对的东西。
+    //    这个 bug 是靠"故意改错一个字段看它会不会报"发现的——
+    //    一个永远为真的守卫比没有守卫更危险。
+    const pattern = new RegExp(`${shape}:\\s*\\{[^{}]*${field}:\\s*(-?[\\d.]+)`, 's')
     const match = pattern.exec(source)
     if (!match) {
       problems.push(`PET_GEOMETRY.${shape}.${field} 在 constants.ts 里找不到（正则未命中）`)
@@ -284,12 +397,16 @@ function assertGeometryInSync() {
     }
   }
 
-  const windowMatch = /window:\s*\{\s*width:\s*(\d+),\s*height:\s*(\d+)/s.exec(source)
-  if (!windowMatch) {
-    problems.push('PET_GEOMETRY.window 在 constants.ts 里找不到')
-  } else if (Number(windowMatch[1]) !== DESIGN_SIZE || Number(windowMatch[2]) !== DESIGN_SIZE) {
+  // 窗口尺寸在设计空间里等于设计边长；constants.ts 用 `PET_DESIGN_SIZE` 常量表达，
+  // 所以这里核对的是**那个常量的值**，而不是写法。之前写死了
+  // `window: { width: <数字> }` 的模式，改成常量引用后就再也匹配不上——
+  // 而"守卫因为被守卫的代码换了写法而失效"正是最该避免的一类静默失效。
+  const designSizeMatch = /export\s+const\s+PET_DESIGN_SIZE\s*=\s*(\d+)/.exec(source)
+  if (!designSizeMatch) {
+    problems.push('constants.ts 里找不到 PET_DESIGN_SIZE 的值')
+  } else if (Number(designSizeMatch[1]) !== DESIGN_SIZE) {
     problems.push(
-      `PET_GEOMETRY.window 是 ${windowMatch[1]}×${windowMatch[2]}，本脚本按 ${DESIGN_SIZE}×${DESIGN_SIZE} 绘制`,
+      `PET_DESIGN_SIZE 是 ${designSizeMatch[1]}，本脚本按 ${DESIGN_SIZE} 绘制`,
     )
   }
 

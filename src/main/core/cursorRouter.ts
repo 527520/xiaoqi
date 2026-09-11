@@ -37,11 +37,16 @@ function originOf(windowBounds: Rect): Point {
  * 2. 光标在窗口内 → 再看是否落在**宠物可见轮廓**上。
  *    窗口比宠物大（有透明留白），那部分留白必须穿透，
  *    否则会出现"窗口挡住了下层按钮，但那里其实什么都没有"这种最典型的桌宠 bug。
+ *
+ * `scale` 是当前缩放。几何在设计空间里只存一份，命中判定前统一换算——
+ * **漏掉这个参数**的后果很具体：宠物放大到 2 倍后，只有左上角那一小块能点，
+ * 其余部分点不到（那正是 openai/codex #34227 记录的现象）。
  */
 export function resolveCursorRoute(
   geometry: PetGeometry,
   windowBounds: Rect,
   screenPoint: Point,
+  scale = 1,
 ): CursorRoute {
   const insideWindow =
     screenPoint.x >= windowBounds.x &&
@@ -51,7 +56,7 @@ export function resolveCursorRoute(
 
   if (!insideWindow) return 'passthrough'
 
-  return hitTestPetScreenPoint(geometry, originOf(windowBounds), screenPoint)
+  return hitTestPetScreenPoint(geometry, originOf(windowBounds), screenPoint, scale)
     ? 'pet'
     : 'passthrough'
 }

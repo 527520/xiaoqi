@@ -21,8 +21,28 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 
-const PET_BODY_CENTER = { x: 110, y: 138 }
 const PET_WINDOW_SIZE = 220
+
+/**
+ * 探针点（宠物**设计空间**坐标）。
+ *
+ * ⚠️ 这些坐标必须与 `src/shared/constants.ts` 的 `PET_GEOMETRY` 保持一致。
+ *    它们不是"随便取几个点"，而是**判别性探针**：
+ *    - `notch` 在窗口内、两耳水平范围内，但落在轮廓之外 ——
+ *      这一项是"逐轮廓判定"与"整窗矩形判定"的分水岭。
+ *    改了宠物形状之后必须回来更新，否则验证会变成"测了个旧形状"。
+ */
+const PROBES_LOCAL = {
+  bodyCentre: { x: 110, y: 139 },
+  /** 右耳内部（设计空间）。耳心 (136,90)，半径 19。 */
+  earRight: { x: 136, y: 86 },
+  /** 双耳之间的凹口：窗口内，但轮廓外。 */
+  notch: { x: 110, y: 48 },
+  /** 窗口左上角透明留白。 */
+  corner: { x: 4, y: 4 },
+  /** 窗口上边缘右侧留白。 */
+  edgeRight: { x: PET_WINDOW_SIZE - 6, y: 4 },
+}
 
 function electronBinary() {
   return join(
@@ -108,67 +128,46 @@ async function main() {
     }
     console.log(`\n宠物窗口：(${win.x}, ${win.y}) ${win.w}×${win.h}`)
 
+    const w = PROBES_LOCAL
     const probes = [
-      {
-        label: '从窗口外进入身体中心',
-        x: win.x + PET_BODY_CENTER.x,
-        y: win.y + PET_BODY_CENTER.y,
-        expect: 'pet',
-      },
-      {
-        label: '窗口左上角透明留白',
-        x: win.x + 4,
-        y: win.y + 4,
-        expect: 'passthrough',
-      },
+      { label: '从窗口外进入身体中心', local: w.bodyCentre, expect: 'pet' },
+      { label: '窗口左上角透明留白', local: w.corner, expect: 'passthrough' },
       {
         // 用窗口上边缘的右侧留白，而不是右下角：
         // 宠物默认贴在**工作区**右下角，窗口右下角在 y≈1416，
         // 而任务栏会把可用光标位置夹到约 y≤1412——那时 SetCursorPos 到不了目标点，
         // 看起来像"应用没翻转"，其实是光标压根没动（本机踩过这个假失败）。
         label: '窗口上边缘右侧留白',
-        x: win.x + PET_WINDOW_SIZE - 6,
-        y: win.y + 4,
+        local: w.edgeRight,
         expect: 'passthrough',
       },
-      // ── 下面几项用来证明"判定是跟着**宠物轮廓**走的"，而不是只看窗口矩形 ──
+      // ── 下面两项用来证明"判定是跟着**宠物轮廓**走的"，而不是只看窗口矩形 ──
+      // 右耳在轮廓内 → 应可点；若实现退化成"整窗矩形判定"，这一项也会通过，
+      // 所以紧跟一个同在窗口内、但**不在轮廓上**的点形成对照。
+      { label: '右耳（轮廓内，应可点）', local: w.earRight, expect: 'pet' },
       {
-        // 右耳中心 (140,86)：与身体相交，属于轮廓内 → 应可点。
-        // 若实现退化成"整窗矩形判定"，这一项也会通过；所以下面紧跟一个
-        // 同在窗口内、但**不在轮廓上**的点形成对照。
-        label: '右耳（轮廓内，应可点）',
-        x: win.x + 140,
-        y: win.y + 86,
-        expect: 'pet',
-      },
-      {
-        // 双耳之间的凹口 (110,52)：在窗口内、也在两耳的水平范围内，
-        // 但落在轮廓之外（身体椭圆上缘约 y≈78，耳朵上缘 y≈66）。
+        // 双耳之间的凹口：在窗口内、也在两耳的水平范围内，但落在轮廓之外。
         // 这一项是"逐轮廓判定"与"整窗判定"的分水岭。
         label: '双耳之间的凹口（窗口内但轮廓外，应穿透）',
-        x: win.x + 110,
-        y: win.y + 52,
+        local: w.notch,
         expect: 'passthrough',
       },
-      {
-        label: '尾巴末端 (172,166)（轮廓内，应可点）',
-        x: win.x + 172,
-        y: win.y + 166,
-        expect: 'pet',
-      },
-      {
-        label: '回到身体中心',
-        x: win.x + PET_BODY_CENTER.x,
-        y: win.y + PET_BODY_CENTER.y,
-        expect: 'pet',
-      },
-      {
-        label: '移到窗口外',
-        x: win.x - 200,
-        y: win.y - 200,
-        expect: 'passthrough',
-      },
-    ]
+      { label: '回到身体中心', local: w.bodyCentre, expect: 'pet' },
+      { label: '移到窗口外', offset: { x: -200, y: -200 }, expect: 'passthrough' },
+    ].map((probe) => {
+      const local = probe.local ?? { x: 0, y: 0 }
+      const offset = probe.offset ?? { x: 0, y: 0 }
+      // 缩放会让"设计空间坐标"与"窗口像素"不再是一一对应，
+      // 但本脚本在默认缩放（1.0）下运行，所以直接相加即可。
+      // 若将来要在别的缩放下验证，这里要乘上 `${win.w} / ${PET_WINDOW_SIZE}`。
+      const scale = win.w / PET_WINDOW_SIZE
+      return {
+        label: probe.label,
+        expect: probe.expect,
+        x: win.x + (local.x + offset.x) * scale,
+        y: win.y + (local.y + offset.y) * scale,
+      }
+    })
 
     let failures = 0
     // 上一次的判定结果；日志里没有翻转行时用它。

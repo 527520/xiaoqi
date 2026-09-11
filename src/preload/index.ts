@@ -21,6 +21,9 @@ const bridge: XiaoqiBridge = {
   setMode: (mode: VisibilityMode) =>
     ipcRenderer.invoke(IPC.modeSet, mode) as Promise<PetRuntimeState>,
 
+  setScale: (scale: number) =>
+    ipcRenderer.invoke(IPC.scaleSet, scale) as Promise<PetRuntimeState>,
+
   notifyInteraction: () => {
     ipcRenderer.send(IPC.petInteract)
   },
