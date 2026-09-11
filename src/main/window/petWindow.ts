@@ -132,7 +132,19 @@ export class PetWindowController {
     // 拖动期间窗口必须持续接收鼠标事件，否则松手
     this.#cursorRoute = 'pet'
     this.#window.setIgnoreMouseEvents(false)
-    this.#log(`开始拖动（偏移 ${String(Math.round(offset.x))},${String(Math.round(offset.y))}）`)
+    // ★ 把**此刻的真实窗口位置**一起打出来。
+    //
+    // 为什么值得多打这几个字：验证脚本要核对"窗口位移 == 光标位移"，
+    // 而它必须知道拖动**开始那一刻**窗口在哪。若它去读启动时打印的
+    // 「初始状态：窗口 (x,y)」，那个值可能已经过期（窗口在启动后
+    // 还会被工作区夹取、置顶重设等动作挪动），于是断言会拿一个
+    // 陈旧的原点去算位移，得出"拖动距离不对"的假结论。
+    // 本机就因为这个假结论白排查了一轮——真因是**测试读错了原点**。
+    const b = this.bounds()
+    this.#log(
+      `开始拖动（偏移 ${String(Math.round(offset.x))},${String(Math.round(offset.y))}）` +
+        ` 窗口原点 (${String(b.x)},${String(b.y)})`,
+    )
   }
 
   /**

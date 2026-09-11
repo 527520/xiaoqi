@@ -232,24 +232,37 @@ async function main() {
     // 再给一轮心跳时间，确保窗口位置已经稳定
     await delay(1200)
 
-    // 从**初始状态快照**里解析窗口位置。
+    // 解析窗口位置。
     //
-    // 不要指望"穿透 →"那行：它只在状态**翻转**时打印，而启动后的初始状态
-    // 就已经是 passthrough，光标又常常不在宠物上，于是可能整轮都没有翻转日志——
-    // 本机因此误判成"功能没跑"。初始快照是无条件的，拿它当基准更可靠。
-    const placement = logs
-      .join('')
-      .match(/初始状态：光标 \(-?\d+,-?\d+\) 窗口 \((-?\d+),(-?\d+)\) (\d+)×(\d+)/)
-    if (!placement) {
-      throw new Error('没能从应用日志里解析出宠物窗口位置（应含"[xiaoqi] 初始状态："行）')
+    // 优先用**「恢复保存的位置」**那一行 —— 它才是窗口真正落脚的地方。
+    //
+    // ⚠️ 为什么不能只用「初始状态」：那一行由光标轮询在**启动后第一拍**
+    //    打印，而位置恢复是**之后**才执行的。两者可能差很远
+    //    （初始那一拍常常还是 `placeAtDefaultPosition()` 的结果）。
+    //    拿它当基准，探针就会点在宠物外面的透明区域上，于是
+    //    「应可点」的几项全部报 passthrough —— 表象像"穿透判定坏了"，
+    //    真因是**脚本用了一个过期的原点**。
+    //
+    //    （另外也别指望"穿透 →"那行：它只在状态**翻转**时打印，
+    //      初始状态本身就是 passthrough，可能整轮都没有翻转日志。）
+    const logText = logs.join('')
+    const restored = logText.match(/恢复保存的位置 \((-?\d+),(-?\d+)\)/)
+    const placement = logText.match(
+      /初始状态：光标 \(-?\d+,-?\d+\) 窗口 \((-?\d+),(-?\d+)\) (\d+)×(\d+)/,
+    )
+    if (!placement && !restored) {
+      throw new Error('没能从应用日志里解析出宠物窗口位置（应有"初始状态"或"恢复保存的位置"行）')
     }
     const win = {
-      x: Number(placement[1]),
-      y: Number(placement[2]),
-      w: Number(placement[3]),
-      h: Number(placement[4]),
+      x: Number(restored?.[1] ?? placement?.[1]),
+      y: Number(restored?.[2] ?? placement?.[2]),
+      w: Number(placement?.[3] ?? PET_WINDOW_SIZE),
+      h: Number(placement?.[4] ?? PET_WINDOW_SIZE),
     }
-    console.log(`\n宠物窗口：(${win.x}, ${win.y}) ${win.w}×${win.h}`)
+    console.log(
+      `\n宠物窗口：(${win.x}, ${win.y}) ${win.w}×${win.h}` +
+        `（原点来源：${restored ? '恢复保存的位置' : '初始状态'}）`,
+    )
 
     const w = PROBES_LOCAL
     const probes = [

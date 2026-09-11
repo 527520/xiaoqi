@@ -19,6 +19,14 @@ import { join } from 'node:path'
 /** 宠物身体中心（设计空间），用来算"从哪里抓住它"。 */
 const BODY_CENTRE = { x: 110, y: 139 }
 
+/**
+ * 设计空间的边长（像素）。
+ *
+ * 窗口尺寸 ÷ 它 = 当前缩放倍数。用它反推比例，比让脚本去猜
+ * "现在 scale 是多少"稳得多——scale 会被持久化，而且随时可能被改。
+ */
+const PET_DESIGN_SIZE = 220
+
 function electronBinary() {
   return join(
     process.cwd(),
@@ -102,7 +110,6 @@ setTimeout(() => {
 async function main() {
   const original = JSON.parse(await runCursorTool(['get']))
   console.log(`原始光标位置：(${original.x}, ${original.y})`)
-
   const logs = []
   const child = spawn(electronBinary(), ['.'], {
     cwd: process.cwd(),
@@ -126,33 +133,103 @@ async function main() {
     while (Date.now() < deadline && !logs.join('').includes('宠物已就绪')) await delay(250)
     await delay(1500)
 
-    const placement = logs
-      .join('')
-      .match(/初始状态：光标 \(-?\d+,-?\d+\) 窗口 \((-?\d+),(-?\d+)\) (\d+)×(\d+)/)
+    // ★ 必须用**恢复之后**的窗口位置，不能用「初始状态」那一行。
+    //
+    // 踩过的坑（也是这条测试反复假失败的真因）：
+    // `初始状态：窗口 (x,y)` 由光标轮询在**启动后第一拍**打印，
+    // 而 `恢复保存的位置 (x,y)` 是**之后**才执行的。两者可能差很远
+    // （前者常是 `placeAtDefaultPosition()` 的结果，后者才是真正落点）。
+    //
+    // 拿前者算抓取点，就会点在宠物外面的透明区域：
+    // 点击穿透，渲染进程收不到 `pointerdown`，日志里连「开始拖动」都没有——
+    // 表象是"拖动功能坏了"，真因是**脚本读了一个过期的原点**。
+    // 它在 scale=1/2 时恰好偶尔对上（两次落点偶然一致），于是更迷惑人。
+    //
+    // 优先取「恢复保存的位置」；没有它（首次运行、无存档）时才退回初始状态。
+    const logText = logs.join('')
+    const restored = logText.match(/恢复保存的位置 \((-?\d+),(-?\d+)\)/)
+    const placement = logText.match(
+      /初始状态：光标 \(-?\d+,-?\d+\) 窗口 \((-?\d+),(-?\d+)\) (\d+)×(\d+)/,
+    )
     if (!placement) throw new Error('没能解析出宠物窗口位置')
-    const win = { x: Number(placement[1]), y: Number(placement[2]) }
+    const winSize = { w: Number(placement[3]), h: Number(placement[4]) }
+    const win = restored
+      ? { x: Number(restored[1]), y: Number(restored[2]) }
+      : { x: Number(placement[1]), y: Number(placement[2]) }
 
-    console.log(`\n拖动前窗口左上角：(${win.x}, ${win.y})`)
+    console.log(
+      `\n窗口原点：(${win.x}, ${win.y})（来源：${restored ? '恢复保存的位置' : '初始状态'}）  尺寸 ${winSize.w}×${winSize.h}`,
+    )
 
-    // 抓住身体中心，往左上拖 160px。
-    // 刻意往**左上**拖：右下角是默认位置，那里已经贴着工作区边缘，
-    // 再往右下拖可能被屏幕边界夹住，看不出"有没有跟手"。
-    const grab = { x: win.x + BODY_CENTRE.x, y: win.y + BODY_CENTRE.y }
+    // ★ 抓取点必须**按实际窗口尺寸**换算，不能直接用设计空间的 110,139。
+    //
+    // 踩过的坑：`BODY_CENTRE` 是 220 设计空间里的坐标，而窗口可以被缩放
+    // （`verify-scale.mjs` 会把 scale=2 持久化到 window-state.json）。
+    // 窗口变成 440×440 之后，`win + (110,139)` 落在宠物**左上方外面**，
+    // 那里是透明区域、会被判定为 passthrough，于是点击根本到不了渲染进程，
+    // 日志里连「开始拖动」都不会出现——看起来像"拖动功能坏了"，
+    // 其实是**测试点错了位置**。
+    //
+    // 用窗口尺寸反推比例最稳：它不依赖脚本去猜当前 scale 是多少。
+    const scale = winSize.w / PET_DESIGN_SIZE
+    const grab = {
+      x: win.x + Math.round(BODY_CENTRE.x * scale),
+      y: win.y + Math.round(BODY_CENTRE.y * scale),
+    }
     const drop = { x: grab.x - 160, y: grab.y - 140 }
-    await mouseSweep(grab, drop)
-    await delay(1200)
+    console.log(`缩放 ${String(scale)}×，抓取点 (${grab.x}, ${grab.y})`)
+
+    // ★ 重试若干次。
+    //
+    // 为什么要重试：主进程每 80ms 轮询光标来决定穿透。脚本把光标**瞬移**
+    // 到抓取点之后，窗口要等下一拍才会从 passthrough 翻成可点。
+    // 这中间按下鼠标，事件会穿到下层窗口，渲染进程连 `pointerdown`
+    // 都收不到——日志里没有「开始拖动」，看起来像"拖不动"，
+    // 实际只是**点在窗口还没准备好的那一瞬**。
+    //
+    // 先移动、等一两拍、再按，才是真实用户的操作顺序（人不会瞬移光标
+    // 并同时按下）。所以这里不是给实现打补丁，是让测试的动作更接近真人。
+    let started = false
+    for (let attempt = 1; attempt <= 4 && !started; attempt++) {
+      await runCursorTool(['set', String(grab.x), String(grab.y)])
+      await delay(attempt === 1 ? 300 : 500)
+      await mouseSweep(grab, drop)
+      await delay(1200)
+      started = logs.join('').includes('开始拖动')
+      if (!started) console.log(`   （第 ${String(attempt)} 次没抓住，重试）`)
+    }
 
     const after = logs.join('').match(/结束拖动 → \((-?\d+),(-?\d+)\)/)
+
+    // ★ 拖动**开始那一刻**的真实窗口原点，而不是启动时那一行。
+    //
+    // 踩过的坑：脚本原本拿 `初始状态：窗口 (x,y)` 当原点，但那个值在
+    // 启动后还会变（工作区夹取、置顶重设、Windows 自己的工作区调整），
+    // 于是"位移对不对"会拿一个陈旧原点去比，得出**假的失败**。
+    // 主进程现在在拖动开始时把真实原点一起打出来，测试直接用它。
+    const originMatch = logs
+      .join('')
+      .match(/开始拖动（偏移 (-?\d+),(-?\d+)） 窗口原点 \((-?\d+),(-?\d+)\)/)
+    const startOffset = originMatch
+      ? { x: Number(originMatch[1]), y: Number(originMatch[2]) }
+      : null
+    const liveOrigin = originMatch ? { x: Number(originMatch[3]), y: Number(originMatch[4]) } : win
+
     check(Boolean(after), '拖动结束后主进程记录了新位置', `日志：${after?.[0] ?? '（没有）'}`)
 
     if (after) {
       const moved = { x: Number(after[1]), y: Number(after[2]) }
-      const dx = moved.x - win.x
-      const dy = moved.y - win.y
+      const dx = moved.x - liveOrigin.x
+      const dy = moved.y - liveOrigin.y
+
+      // 期望位移 = 拖动距离。这里**不依赖**起点是用哪个原点算的：
+      // 抓取点相对原点的偏移在拖动前后不变，所以位移就该等于
+      // (drop - grab)，与原点无关。原点只用来核对"抓取点没算错"。
       check(
         Math.abs(dx - (drop.x - grab.x)) <= 30 && Math.abs(dy - (drop.y - grab.y)) <= 30,
         '★ 窗口跟着光标移动了（位移与拖动距离一致）',
-        `期望位移约 (${String(drop.x - grab.x)}, ${String(drop.y - grab.y)})，实际 (${String(dx)}, ${String(dy)})`,
+        `期望位移约 (${String(drop.x - grab.x)}, ${String(drop.y - grab.y)})，实际 (${String(dx)}, ${String(dy)})` +
+          `\n     拖动起点：窗口原点 (${String(liveOrigin.x)},${String(liveOrigin.y)})，光标偏移 ${JSON.stringify(startOffset)}`,
       )
     }
 

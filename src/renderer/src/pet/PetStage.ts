@@ -183,7 +183,20 @@ export class PetStage {
       this.#dragging = false
       // 立即进入拖动模式：主进程会在这段时间里保持接收鼠标事件，
       // 否则光标一移出宠物轮廓，窗口就"松手"了。
-      this.#dragStart?.({ x: event.global.x / this.#scale, y: event.global.y / this.#scale })
+      //
+      // ★ 这里**不能**除以 `#scale`。
+      //
+      // 踩过的坑：`event.global` 是 Pixi 的世界坐标，而这个舞台的
+      // `root` 已经承担了缩放（`#root.scale.set(rootScale)`），
+      // 所以 `event.global` 落在**窗口 CSS 像素**里——它本来就是我们
+      // 要发给主进程的东西（主进程按窗口左上角 + DIP 偏移跟随光标）。
+      //
+      // 初版多除了一个 `#scale`，于是缩放 2× 时：
+      //   抓取点 (220, 278) 被算成 (110, 139)，窗口**只跟到手的一半**，
+      //   而拖动手感表现为"宠物跑得比光标慢"。
+      //   更糟的是它不报错——只是拖不准，很容易被当成"手感问题"。
+      //   是 `verify-drag.mjs` 断言"位移必须与拖动距离一致"抓出来的。
+      this.#dragStart?.({ x: event.global.x, y: event.global.y })
     })
 
     app.stage.on('pointermove', (event) => {
