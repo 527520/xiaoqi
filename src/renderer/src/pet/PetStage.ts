@@ -2,18 +2,21 @@ import { type Application, Container, FillGradient, Graphics } from 'pixi.js'
 
 import { PET_GEOMETRY } from '@shared/constants'
 import { PET_BODY, PET_FACE, PET_PALETTE, PET_STROKE_WIDTH } from '@shared/palette'
-import type { Emotion } from '@shared/types'
+import type { Emotion, RelationshipMood } from '@shared/types'
 
 import {
   BLINK_DURATION_SECONDS,
+  blinkIntervalSeconds,
   bounceEnvelope,
   breathPose,
   earSecondarySway,
   eyeOpenness,
   gazeOffset,
+  moodAnimation,
   REACTION_DURATION_SECONDS,
   swayAngle,
   tailSway,
+  type MoodAnimation,
 } from './animation'
 import { faceFor } from './emotionFace'
 
@@ -114,6 +117,22 @@ export class PetStage {
 
   setEmotion(emotion: Emotion): void {
     this.#emotion = emotion
+  }
+
+  /**
+   * 关系基调。只调制**表现幅度**，不改变任何"是否回应"的行为。
+   * 默认 `reserved`（1 倍系数，等于不调制）——
+   * 所以关系还没建立时画面与从前完全一致。
+   */
+  #mood: RelationshipMood = 'reserved'
+
+  setMood(mood: RelationshipMood): void {
+    this.#mood = mood
+  }
+
+  /** 取当前基调的动画系数（供测试与调试快照使用）。 */
+  get moodAnimation(): MoodAnimation {
+    return moodAnimation(this.#mood)
   }
 
   constructor(app: Application, onInteract: () => void) {
@@ -226,6 +245,18 @@ export class PetStage {
   }
 
   /**
+   * 诊断：触发一次交互动画（等于在被点一下）。
+   *
+   * ⚠️ 为什么不能用 `window.xiaoqi.notifyInteraction()` 来代替：
+   *    那条桥只是**告诉主进程**"用户点了"（用于记记忆、推进生理），
+   *    它**不经过 Pixi 的 pointerup**，因此不会触发舞台上的弹跳。
+   *    要验证"点了会有动效"，必须走这里。
+   */
+  debugTriggerInteraction(): void {
+    this.#trigger()
+  }
+
+  /**
    * 设置目标帧率。
    *
    * ⚠️ Pixi 的 `maxFPS = 0` 语义是**不限帧**，不是暂停——与直觉相反。
@@ -268,8 +299,12 @@ export class PetStage {
     this.#nextBlinkAt -= dt
     if (this.#nextBlinkAt <= 0) {
       this.#blink = BLINK_DURATION_SECONDS
-      // 随机间隔：固定节奏的眨眼看起来像机器。2.4–7s 接近真实小猫的频率。
-      this.#nextBlinkAt = 2.4 + Math.random() * 4.6
+      // 随机间隔：固定节奏的眨眼看起来像机器。
+      // 基准值由**关系基调**决定（越亲近眨眼越勤——那是"放松"的信号，
+      // 见 `blinkIntervalSeconds`），再叠一层随机避免机械感。
+      // 基准 4.4s ⇒ 实际落在约 4.4–9s，接近真实小猫的频率。
+      const base = blinkIntervalSeconds(this.#mood)
+      this.#nextBlinkAt = base + Math.random() * 4.6
     }
   }
 
@@ -301,12 +336,18 @@ export class PetStage {
 
   #updatePose(): void {
     const t = this.#elapsed
+    // ★ 关系基调通过**调制已有动作的幅度**来表达（不是加新动作）。
+    //   理由见 `animation.ts` 里 `MOOD_ANIMATION` 的注释：
+    //   越亲近 → 呼吸越明显、越爱动、略微前倾。
+    //   `reserved` 全是 1 倍，即"什么都不改"——所以这个特性
+    //   在关系还没建立时**不会**给画面引入任何变化。
+    const moodAnim = moodAnimation(this.#mood)
     const { squash, stretch, offsetY } = breathPose(t)
-    const sway = swayAngle(t)
+    const sway = swayAngle(t) * moodAnim.swayScale
 
-    let scaleX = 1 + squash
-    let scaleY = 1 + stretch
-    let poseOffsetY = offsetY
+    let scaleX = 1 + squash * moodAnim.breathScale
+    let scaleY = 1 + stretch * moodAnim.breathScale
+    let poseOffsetY = offsetY * moodAnim.breathScale
     let rootScale = this.#scale
 
     if (this.mode === 'silent') {
@@ -352,10 +393,11 @@ export class PetStage {
     }
 
     applyBodyLike(this.#body)
-    applyBodyLike(this.#ears, 0.02, sway + earSecondarySway(t))
-    applyBodyLike(this.#tail, 0, sway * 0.6 + tailSway(t))
+    applyBodyLike(this.#ears, 0.02, sway + earSecondarySway(t) * moodAnim.fidgetScale)
+    applyBodyLike(this.#tail, 0, sway * 0.6 + tailSway(t) * moodAnim.fidgetScale)
     applyBodyLike(this.#blush)
-    applyBodyLike(this.#mouth)
+    // 嘴巴与身体同呼吸，但**带上基调的前倾**：越亲近越像"凑过来说话"。
+    this.#mouth.rotation = sway + moodAnim.lean
 
     // 影子：横向随呼吸轻微伸缩，透明度随身体升高而变淡（离地感）。
     this.#shadow.pivot.set(PET_FACE.shadow.cx, PET_FACE.shadow.cy)
@@ -625,6 +667,11 @@ export class PetStage {
         reactionRemaining: Math.round(this.#reactionRemaining * 1000) / 1000,
       },
       gaze: { x: Math.round(this.#gaze.x * 100) / 100, y: Math.round(this.#gaze.y * 100) / 100 },
+      // 关系基调与它实际生效的动画系数。
+      // 放进来是为了让"关系真的影响到了画面"这件事**可被脚本核对**——
+      // 否则它只是一个传进来了但没人用的字段，而那正是最容易发生的静默失效。
+      mood: this.#mood,
+      moodAnimation: this.moodAnimation,
       body: describe(this.#body),
       ears: describe(this.#ears),
       tail: describe(this.#tail),

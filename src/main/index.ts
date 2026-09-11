@@ -142,6 +142,8 @@ function runtimeState(): PetRuntimeState {
     workMode: perception?.snapshot?.workMode ?? 'rest',
     emotion: perception?.snapshot?.emotion.emotion ?? 'calm',
     disturbLevel: currentDisturbLevel(),
+    // 关系基调（只影响表现，不影响是否回应）。
+    mood: perception?.snapshot?.mood ?? 'reserved',
   }
 }
 
@@ -198,8 +200,40 @@ function logPerceivedState(state: PerceivedState): void {
   // 保留一位小数：生理量每小时只变几个百分点，整数会把变化抹平，
   // 让"它在动"与"它卡住了"看起来一样。
   const pct = (v: number): string => `${(v * 100).toFixed(1)}%`
+
+  if (decision.isHeartbeat) {
+    // 心跳只需要证明"它还活着、量还在动"，所以压成一行。
+    // 压成一行是有理由的：心跳每 30 秒一次，展开成八行会在长时间运行时
+    // 把日志撑得很难翻。
+    log(
+      `[状态]（心跳）+${String(Math.round(state.uptimeMs / 1000))}s ` +
+        `精力 ${pct(p.energy)} 饥饿 ${pct(p.hunger)} 无聊 ${pct(p.boredom)} 社交 ${pct(p.social)}｜` +
+        `好感 ${pct(state.relationship.affection)} 默契 ${pct(state.relationship.rapport)}｜基调 ${state.mood}`,
+    )
+    return
+  }
+
+  // ★ 状态**变化**时打完整的调试面板，而不是压成一行。
+  //
+  // 这里踩过一个坑：最初变化时也只打那一行压缩摘要，于是
+  // 「一个实时打印当前状态的调试面板」（施工令 §5 M2）实际上
+  // **看不到大部分状态**——尤其是新加的关系层，一行都没有，
+  // 而"面板在正常工作"这个假象还很难被发现（日志明明有输出）。
+  // 是 `scripts/verify-m2.mjs` 逐项核对面板里该有哪些字段时抓出来的。
+  //
+  // 完整面板直接复用 `perception.describe()`：那是**唯一**一份
+  // 格式化逻辑，不要在日志这边再写一套（两套迟早会漂移，
+  // 而且"日志里少了一项"这种偏差几乎不可能被注意到）。
+  const full = perception?.describe()
+  if (full && full.length > 0) {
+    log(`[状态] +${String(Math.round(state.uptimeMs / 1000))}s`)
+    for (const line of full) log(`   ${line}`)
+    return
+  }
+
+  // 拿不到 `perception`（理论上不该发生）时退回压缩格式，至少不丢信息。
   log(
-    `[状态]${decision.isHeartbeat ? '（心跳）' : ''} +${String(Math.round(state.uptimeMs / 1000))}s ` +
+    `[状态] +${String(Math.round(state.uptimeMs / 1000))}s ` +
       `${state.processName ?? '（拿不到进程）'} → ${state.workMode}｜情绪 ${state.emotion.emotion}｜` +
       `打扰 ${level}｜精力 ${pct(p.energy)} 饥饿 ${pct(p.hunger)} 无聊 ${pct(p.boredom)} 社交 ${pct(p.social)}｜` +
       `空闲 ${state.idleMs === null ? '?' : String(Math.round(state.idleMs / 1000))}s｜QUNS=${String(state.notificationState)}`,
@@ -535,7 +569,10 @@ function recordInteractionMemory(): void {
   const snapshot = perception?.snapshot
   if (!snapshot) return
 
-  memory.recordEpisode(`用户在「${snapshot.workMode}」时来找我玩`, ['interaction', snapshot.workMode])
+  memory.recordEpisode(`用户在「${snapshot.workMode}」时来找我玩`, [
+    'interaction',
+    snapshot.workMode,
+  ])
 }
 
 /**
@@ -648,6 +685,22 @@ function bootstrap(): void {
     perception.forceEmotion(forced as Emotion)
     // 锁定的那一刻就把新情绪推给渲染层，不必等下一拍
     broadcastState()
+  }
+
+  // 取证用：锁死**关系基调**，便于核对三种基调画出来有什么不同。
+  // 关系是长期变量（`reserved` 要相处好几天才到 `warm`），
+  // 不锁的话根本没法在几秒内对比。
+  const forcedMood = process.env.XIAOQI_FORCE_MOOD
+  if (forcedMood) {
+    if (forcedMood === 'reserved' || forcedMood === 'warm' || forcedMood === 'attached') {
+      log(`⚠️ 关系基调已锁定为 ${forcedMood}（XIAOQI_FORCE_MOOD，仅取证用）`)
+      perception.forceMood(forcedMood)
+      broadcastState()
+    } else {
+      // 说不认识就说出来，而不是静默忽略——静默忽略会让取证脚本
+      // 拿到一堆"看起来一样"的截图却完全不知道为什么。
+      log(`⚠️ 未知的关系基调 ${forcedMood}，已忽略（合法值：reserved / warm / attached）`)
+    }
   }
 
   const entry = resolveRendererEntry()

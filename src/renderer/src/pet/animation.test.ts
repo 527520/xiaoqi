@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest'
 
+import type { RelationshipMood } from '@shared/types'
+
 import {
   BLINK_DURATION_SECONDS,
+  blinkIntervalSeconds,
   bounceEnvelope,
   breathPose,
   earSecondarySway,
   eyeOpenness,
   gazeOffset,
+  moodAnimation,
   REACTION_DURATION_SECONDS,
   swayAngle,
   tailSway,
@@ -226,5 +230,70 @@ describe('视线跟随', () => {
 
   it('reach 非法时不崩（防除零）', () => {
     expect(gazeOffset(500, 500, eye.x, eye.y, 4, 0)).toEqual({ x: 0, y: 0 })
+  })
+})
+
+describe('关系基调对动画的调制', () => {
+  const MOODS: RelationshipMood[] = ['reserved', 'warm', 'attached']
+
+  it('★ reserved 是"什么都不改"（1 倍），所以关系没建立时画面与从前一致', () => {
+    const reserved = moodAnimation('reserved')
+    expect(reserved.breathScale).toBe(1)
+    expect(reserved.swayScale).toBe(1)
+    expect(reserved.fidgetScale).toBe(1)
+    expect(reserved.lean).toBe(0)
+  })
+
+  it('★ 越亲近，动作幅度越大（单调，不能出现"更亲近反而更呆"）', () => {
+    const [reserved, warm, attached] = MOODS.map((m) => moodAnimation(m))
+    expect(warm!.breathScale).toBeGreaterThan(reserved!.breathScale)
+    expect(attached!.breathScale).toBeGreaterThan(warm!.breathScale)
+    expect(warm!.swayScale).toBeGreaterThan(reserved!.swayScale)
+    expect(attached!.swayScale).toBeGreaterThan(warm!.swayScale)
+    expect(warm!.fidgetScale).toBeGreaterThan(reserved!.fidgetScale)
+    expect(attached!.fidgetScale).toBeGreaterThan(warm!.fidgetScale)
+  })
+
+  it('★ 三种基调的参数**各不相同**（否则这个特性是白做的）', () => {
+    const signatures = MOODS.map((m) => JSON.stringify(moodAnimation(m)))
+    expect(new Set(signatures).size).toBe(MOODS.length)
+  })
+
+  it('★ 幅度都在"慢慢感觉到"的量级内（一次也不该超过 2 倍）', () => {
+    // 关系是长期变量，表达必须含蓄。一下子变化明显会让用户以为宠物坏了。
+    for (const mood of MOODS) {
+      const anim = moodAnimation(mood)
+      expect(anim.breathScale).toBeLessThanOrEqual(2)
+      expect(anim.swayScale).toBeLessThanOrEqual(2)
+      expect(anim.fidgetScale).toBeLessThanOrEqual(2)
+      // 前倾角很小（弧度），2.4° 左右，不是"鞠躬"。
+      expect(Math.abs(anim.lean)).toBeLessThan(0.1)
+    }
+  })
+
+  it('★ 前倾方向一致：都是"往前凑"，没有一个是"往后躲"', () => {
+    for (const mood of MOODS) {
+      expect(moodAnimation(mood).lean).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  it('未知/undefined 基调回落到 reserved（不崩、不产生 NaN）', () => {
+    expect(moodAnimation(undefined)).toEqual(moodAnimation('reserved'))
+    expect(moodAnimation('nonsense' as RelationshipMood)).toEqual(moodAnimation('reserved'))
+  })
+
+  it('★ 越亲近眨眼越勤（放松的信号；紧张时会盯着不动）', () => {
+    const reserved = blinkIntervalSeconds('reserved')
+    const warm = blinkIntervalSeconds('warm')
+    const attached = blinkIntervalSeconds('attached')
+    expect(warm).toBeLessThan(reserved)
+    expect(attached).toBeLessThan(warm)
+  })
+
+  it('眨眼间隔都是正的（写成 0 会让它永远闭着眼——曾经踩过这个坑）', () => {
+    for (const mood of MOODS) {
+      expect(blinkIntervalSeconds(mood)).toBeGreaterThan(1)
+    }
+    expect(blinkIntervalSeconds(undefined)).toBeGreaterThan(1)
   })
 })

@@ -148,6 +148,11 @@ export function usePetStage(
       Reflect.set(window, '__petLayer', (layer: string, visible: boolean) => {
         stage?.debugSetLayerVisible(layer, visible)
       })
+      // 触发一次交互动画。契约测试要验证"点了会有动效"时走这里——
+      // `notifyInteraction()` 只到主进程，不会触发 Pixi 的弹跳。
+      Reflect.set(window, '__petInteract', () => {
+        stage?.debugTriggerInteraction()
+      })
 
       app.ticker.add((ticker) => {
         // Pixi 的 deltaTime 是"以 60fps 为 1"的无量纲标量；
@@ -174,6 +179,7 @@ export function usePetStage(
       // 后者在 TS 里会因为该键未声明而报 TS2339。
       Reflect.deleteProperty(window, '__petDebug')
       Reflect.deleteProperty(window, '__petLayer')
+      Reflect.deleteProperty(window, '__petInteract')
       safeDestroy()
     }
   }, [containerRef, scale])
@@ -198,6 +204,13 @@ export function usePetStage(
   useEffect(() => {
     if (state?.emotion) stageRef.current?.setEmotion(state.emotion)
   }, [state?.emotion])
+
+  // ── 关系基调 → 动作幅度 ──
+  // 只调制已有动作的幅度（呼吸深浅、摇摆、眨眼频率、前倾），不加新动作。
+  // `reserved` 是 1 倍系数，所以关系没建立时画面与从前完全一致。
+  useEffect(() => {
+    if (state?.mood) stageRef.current?.setMood(state.mood)
+  }, [state?.mood])
 
   // ── 视线跟随 ──
   // 只在光标位置真的变化时更新；主进程已经在"光标够远"时给 null。

@@ -6,6 +6,8 @@
  * 所以把数值逻辑抽成纯函数，用测试把"数学上不可能出现的结果"钉死。
  */
 
+import type { RelationshipMood } from '@shared/types'
+
 /** 眨眼持续时长（秒）。 */
 export const BLINK_DURATION_SECONDS = 0.13
 
@@ -148,5 +150,95 @@ export function gazeOffset(
   return {
     x: (dx / distance) * magnitude * maxOffset,
     y: (dy / distance) * magnitude * maxOffset,
+  }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 关系基调对动画的调制
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * 动画的一组可调参数。关系基调通过它们影响**表现**。
+ *
+ * ⚠️ 注意这里**没有**任何"变冷淡"的档位。三个基调都是"更亲近"，
+ *    只是程度不同——`reserved` 是**礼貌克制**，不是疏远。
+ *    这条约束与 `core/relationship.ts` 里的一致：关系只改变怎么表现，
+ *    永不改变是否回应（ADR-0003）。
+ */
+export interface MoodAnimation {
+  /** 呼吸幅度倍数。越亲近呼吸越明显（"凑过来"）。 */
+  readonly breathScale: number
+  /** 摇摆幅度倍数。越亲近越爱动。 */
+  readonly swayScale: number
+  /** 尾巴与耳朵的次级动作倍数。 */
+  readonly fidgetScale: number
+  /**
+   * 静态前倾角（弧度）。
+   *
+   * 正数 = 向观察者/身体前方倾。`attached` 会略微前倾，
+   * 读起来像"凑近了看你"；`reserved` 保持端正。
+   */
+  readonly lean: number
+}
+
+/**
+ * 基调 → 动画参数。
+ *
+ * ── 为什么用"幅度"而不是"加一段新动画" ──
+ *
+ * 加新动画会让状态组合爆炸（8 情绪 × 3 基调 × 4 生理状态），
+ * 而且用户根本分辨不出"这个是默契版呼吸"。
+ * 调节**已有动作的幅度**是同一件事的省力做法：
+ * 用户感觉到的是"它今天好像更黏人"，而不是"它多了个动作"。
+ *
+ * 数值刻意都很小：`attached` 的呼吸只比 `reserved` 大 35%。
+ * 关系是**长期**变量，它的表达必须是"慢慢感觉到的"，
+ * 一下子变化明显反而会让用户以为宠物坏了。
+ */
+export const MOOD_ANIMATION: Record<RelationshipMood, MoodAnimation> = {
+  reserved: { breathScale: 1, swayScale: 1, fidgetScale: 1, lean: 0 },
+  warm: { breathScale: 1.15, swayScale: 1.3, fidgetScale: 1.25, lean: 0.012 },
+  attached: { breathScale: 1.35, swayScale: 1.6, fidgetScale: 1.5, lean: 0.024 },
+}
+
+/**
+ * 取某个基调的动画参数。
+ *
+ * ⚠️ 这里**故意**保留了防御性分支。类型上 `mood` 只有三个取值，
+ *    但它的真实来源是 IPC 传来的字符串——渲染层与主进程是两个进程，
+ *    类型在运行期不作数。一个未知基调不该让整只宠物渲染不出来，
+ *    所以未知值回落到 `reserved`。
+ *    （这正是"信任边界处的输入要当未知处理"的常规做法。）
+ */
+export function moodAnimation(mood: RelationshipMood | undefined): MoodAnimation {
+  const key: string = mood ?? 'reserved'
+  // ⚠️ 用 `Object.hasOwn` 而不是 `MOOD_ANIMATION[key] ?? 兜底`。
+  //
+  //    Record 的索引签名在类型上"永远不会是 undefined"，所以
+  //    `?? 兜底` 会被 lint 判为多余分支并被删掉——而删掉之后，
+  //    运行期收到未知基调就会返回 `undefined`，
+  //    下游读 `.breathScale` 直接抛错，**整只宠物渲染不出来**。
+  //
+  //    这里要表达的是"这个 key 可能不在表里"，那是**存在性**问题，
+  //    不是"值可能为空"。用 hasOwn 才如实表达它，也让 lint 无从下手删。
+  if (!Object.hasOwn(MOOD_ANIMATION, key)) return MOOD_ANIMATION.reserved
+  return MOOD_ANIMATION[key as RelationshipMood]
+}
+
+/**
+ * 两次眨眼之间的间隔（秒）。
+ *
+ * 越亲近眨眼越频繁——这是"放松"的生理信号：
+ * 紧张时人会减少眨眼、盯得发直；放松时眨眼自然变多。
+ * `reserved`（还不太熟）盯着你的时间更长，`attached` 更放松。
+ */
+export function blinkIntervalSeconds(mood: RelationshipMood | undefined): number {
+  switch (mood) {
+    case 'attached':
+      return 2.6
+    case 'warm':
+      return 3.4
+    default:
+      return 4.4
   }
 }

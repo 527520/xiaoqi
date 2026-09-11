@@ -1,0 +1,21 @@
+[xiaoqi] [状态] +0s
+[xiaoqi]    前台进程：msedge.exe  →  类别：浏览器
+[xiaoqi]    空闲时长：301s
+[xiaoqi]    系统状态：QUNS=5
+[xiaoqi]    工作模式：weekend（周末）
+[xiaoqi]    情绪：calm
+[xiaoqi]    生理：精力 85% / 饥饿 20% / 无聊 15% / 社交 20%
+[xiaoqi]    关系：好感 30% / 信任 40% / 默契 10%  →  强度 30% 基调 reserved
+[xiaoqi]    同类工具连续：0s
+[xiaoqi]    已运行：0s
+[xiaoqi]    pet 页面已开始执行
+[xiaoqi] [状态] +4s
+[xiaoqi]    前台进程：msedge.exe  →  类别：浏览器
+[xiaoqi]    空闲时长：304s
+[xiaoqi]    系统状态：QUNS=5
+[xiaoqi]    工作模式：weekend（周末）
+[xiaoqi]    情绪：happy
+[xiaoqi]    生理：精力 85% / 饥饿 20% / 无聊 15% / 社交 20%
+[xiaoqi]    关系：好感 30% / 信任 40% / 默契 10%  →  强度 30% 基调 reserved
+[xiaoqi]    同类工具连续：4s
+[xiaoqi]    已运行：4s

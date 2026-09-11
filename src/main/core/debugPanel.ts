@@ -21,11 +21,17 @@ export const PANEL_HEARTBEAT_MS = 30_000
 /**
  * 计算"状态指纹"。
  *
- * 只包含**有意义的变化**：前台进程、工作模式、情绪、打扰级别、系统状态。
- * **刻意不含生理量**——它们是连续变化的，放进来会让每一拍都算"变了"，
- * 节流立刻失效、又回到淹日志的老样子。
+ * 只包含**有意义的变化**：前台进程、工作模式、情绪、打扰级别、系统状态、
+ * 以及**关系基调**。
  *
- * 生理量的"还在动"由心跳行负责体现。
+ * ── 为什么含关系基调，而不含关系的三个百分比 ──
+ *
+ * 同样的理由：好感/信任/默契是**连续变化**的，放进来会让每一拍都算"变了"，
+ * 节流立刻失效、又回到淹日志的老样子。
+ * 但**基调**是离散的（reserved/warm/attached），它变化意味着宠物的表现
+ * 会明显不同——那正是调试时想看到的那一行。
+ *
+ * 生理量与关系的原始百分比由心跳行负责体现"它们还在动"。
  */
 export function stateFingerprint(state: PerceivedState, level: DisturbLevel): string {
   return [
@@ -34,6 +40,9 @@ export function stateFingerprint(state: PerceivedState, level: DisturbLevel): st
     state.emotion.emotion,
     level,
     String(state.notificationState),
+    state.mood,
+    // 想念只打一次（进/出该状态时），它是个离散的布尔量。
+    state.misses ? 'miss' : '-',
   ].join('|')
 }
 

@@ -184,7 +184,28 @@ export interface PetRuntimeState {
    * 渲染层据此决定要不要冒泡/出声（`silent` 与 `low` 都不主动）。
    */
   readonly disturbLevel: DisturbLevel
+  /**
+   * 关系决定的**表现基调**（§5 M2 的关系层）。
+   *
+   * ⚠️ 它影响的是**怎么表现**（更黏人 / 更放松），
+   *    **绝不**影响"是否回应"。三个取值都是更亲近，
+   *    没有任何一个是"冷淡/拒绝"——见 `main/core/relationship.ts`。
+   *
+   * 推给渲染层的理由：关系是累积量，用户看不到数字，
+   * 但应该能**感觉到**它——相处久了它会更主动地凑过来。
+   */
+  readonly mood: RelationshipMood
 }
+
+/**
+ * 关系决定的**表现基调**。
+ *
+ * 刻意是一个只有三个取值的联合类型，而不是一个数字区间：
+ * 它的存在意义就是**没有"拒绝"这个档位**。
+ * 想加"关系低就懒得理你"的人，必须先在类型里显式加一个取值——
+ * 那是个会被 review 抓到的动作，而不是一行改掉的判断。
+ */
+export type RelationshipMood = 'reserved' | 'warm' | 'attached'
 
 /**
  * 记忆账本里的一行（M3）。

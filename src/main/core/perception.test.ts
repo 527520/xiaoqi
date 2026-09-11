@@ -167,3 +167,72 @@ describe('感知轮询', () => {
     expect(lines).not.toMatch(/title\s*[:=]/i)
   })
 })
+
+describe('关系层接入状态引擎', () => {
+  it('tick 会带上关系状态与表现基调', () => {
+    const { perception } = setup({ processName: 'code.exe' })
+    const state = perception.tick()
+
+    expect(state.relationship.affection).toBeGreaterThan(0)
+    expect(state.mood).toBe('reserved')
+    expect(state.misses).toBe(false)
+  })
+
+  it('★ noteInteraction 会同时推高生理（社交回落）与关系（好感上升）', () => {
+    const { perception, advance } = setup({ processName: 'code.exe' })
+    perception.tick()
+    const before = perception.snapshot
+
+    perception.noteInteraction()
+    advance(1000)
+    const after = perception.tick()
+
+    expect(after.relationship.affection).toBeGreaterThan(before!.relationship.affection)
+    expect(after.relationship.trust).toBeGreaterThan(before!.relationship.trust)
+    // 社交欲"被满足了"
+    expect(after.physiology.social).toBeLessThan(before!.physiology.social)
+  })
+
+  it('★ 一次互动只被消费一次（不会被反复计入关系）', () => {
+    const { perception, advance } = setup({ processName: 'code.exe' })
+    perception.tick()
+    perception.noteInteraction()
+    advance(1000)
+    const first = perception.tick()
+
+    // 之后不再互动，只让时间流逝：好感只会因回落变小，不会继续因那一次互动上涨。
+    advance(60_000)
+    const second = perception.tick()
+    expect(second.relationship.affection).toBeLessThan(first.relationship.affection)
+  })
+
+  it('★ 默契随陪伴时间上升，即使完全没有互动', () => {
+    const { perception, advance } = setup({ processName: 'code.exe' })
+    const first = perception.tick()
+    advance(6 * 60 * 60 * 1000)
+    const later = perception.tick()
+
+    expect(later.relationship.rapport).toBeGreaterThan(first.relationship.rapport)
+  })
+
+  it('★ 调试面板会打印关系与基调（否则这一层等于不可观测）', () => {
+    const { perception } = setup({ processName: 'code.exe' })
+    perception.tick()
+    const lines = perception.describe().join('\n')
+
+    expect(lines).toContain('关系：')
+    expect(lines).toContain('好感')
+    expect(lines).toContain('基调')
+  })
+
+  it('★ describe() 输出关系后仍然不含任何用户内容', () => {
+    // 关系那一行是新增的，这条确认它没有把越界内容带进来。
+    const { perception } = setup({ processName: 'msedge.exe', idleMs: 12_000 })
+    perception.tick()
+    const lines = perception.describe().join('\n')
+
+    expect(lines).not.toMatch(/https?:\/\//)
+    expect(lines).not.toMatch(/[A-Za-z]:\\/)
+    expect(lines).not.toMatch(/标题[：:]/)
+  })
+})

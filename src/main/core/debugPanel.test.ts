@@ -15,6 +15,9 @@ function state(overrides: Partial<PerceivedState> = {}): PerceivedState {
     workModeReason: '前台是开发工具',
     emotion: { emotion: 'focused', since: 0 },
     physiology: { energy: 0.8, hunger: 0.2, boredom: 0.1, social: 0.2 },
+    relationship: { affection: 0.3, trust: 0.4, rapport: 0.1 },
+    mood: 'reserved',
+    misses: false,
     sameCategoryMs: 0,
     sampledAt: 0,
     uptimeMs: 0,
@@ -161,5 +164,32 @@ describe('打扰级别参与指纹（形态与打扰分别变化都要可见）'
     const levels: DisturbLevel[] = ['low', 'silent']
     const prints = levels.map((l) => stateFingerprint(s, l))
     expect(new Set(prints).size).toBe(2)
+  })
+})
+
+describe('状态指纹：关系基调', () => {
+  it('★ 基调变了 → 指纹变（否则"它突然更黏人了"这件事在日志里看不到）', () => {
+    const a = stateFingerprint(state({ mood: 'reserved' }), 'low')
+    const b = stateFingerprint(state({ mood: 'attached' }), 'low')
+    expect(a).not.toBe(b)
+  })
+
+  it('★ "想念"是离散量，进/出该状态各打一次', () => {
+    const normal = stateFingerprint(state({ misses: false }), 'low')
+    const missing = stateFingerprint(state({ misses: true }), 'low')
+    expect(normal).not.toBe(missing)
+  })
+
+  it('★ 关系的**百分比**不进指纹（连续量放进去会让节流失效、又淹日志）', () => {
+    // 同样的基调与 misses，只有百分比不同 ⇒ 指纹必须一样。
+    const a = stateFingerprint(
+      state({ relationship: { affection: 0.31, trust: 0.4, rapport: 0.1 } }),
+      'low',
+    )
+    const b = stateFingerprint(
+      state({ relationship: { affection: 0.315, trust: 0.401, rapport: 0.101 } }),
+      'low',
+    )
+    expect(a).toBe(b)
   })
 })

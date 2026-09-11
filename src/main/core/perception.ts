@@ -1,5 +1,5 @@
 import { QUNS_POLL_INTERVAL_MS } from '@shared/constants'
-import type { Emotion, UserNotificationState, WorkMode } from '@shared/types'
+import type { Emotion, RelationshipMood, UserNotificationState, WorkMode } from '@shared/types'
 
 import type { Platform } from '../platform'
 import {
@@ -10,6 +10,14 @@ import {
   type Physiology,
 } from './physiology'
 import { CATEGORY_LABELS, type AppCategory } from './processTable'
+import {
+  INITIAL_RELATIONSHIP,
+  missesUser,
+  relationshipMood,
+  relationshipStrength,
+  stepRelationship,
+  type Relationship,
+} from './relationship'
 import { inferWorkMode } from './workMode'
 
 /**
@@ -45,6 +53,17 @@ export interface PerceivedState {
   readonly workModeReason: string
   readonly emotion: EmotionState
   readonly physiology: Physiology
+  /**
+   * 关系状态（好感/信任/默契）。
+   *
+   * ⚠️ 它**只影响表现**，不影响"是否回应"。见 `core/relationship.ts`
+   *    文件头的三条硬约束与 ADR-0003。
+   */
+  readonly relationship: Relationship
+  /** 由关系强度得出的表现基调。**三个取值都是"更亲近"，没有"更冷淡"。** */
+  readonly mood: RelationshipMood
+  /** 关系是否已淡到"想念"的程度（**不是**"被冷落"）。 */
+  readonly misses: boolean
   /** 连续使用同一应用类别的时长（毫秒）。 */
   readonly sameCategoryMs: number
   /** 上一次真正读到信号的时刻（毫秒）。 */
@@ -94,6 +113,7 @@ export class Perception {
   #disposed = false
 
   #physiology: Physiology = INITIAL_PHYSIOLOGY
+  #relationship: Relationship = INITIAL_RELATIONSHIP
   #emotion: EmotionState = { emotion: 'calm', since: 0 }
   #category: AppCategory = 'unknown'
   #sameCategorySince = 0
@@ -180,8 +200,14 @@ export class Perception {
     }
     const sameCategoryMs = now - this.#sameCategorySince
 
-    // ── 推进生理与情绪（时间作为参数传入，因此可用假时钟测试）──
+    // ── 推进生理、关系与情绪（时间作为参数传入，因此可用假时钟测试）──
     this.#physiology = stepPhysiology(this.#physiology, elapsedMs, work.mode, this.#hadInteraction)
+    // 关系与生理共用 `#hadInteraction` 这一个信号源。
+    // 刻意让它们读**同一个**信号，而不是各自记一份：
+    // 两份计数迟早会漂移，而"用户伸手了"这件事只发生一次。
+    this.#relationship = stepRelationship(this.#relationship, elapsedMs, work.mode, {
+      positiveInteraction: this.#hadInteraction,
+    })
     this.#hadInteraction = false
 
     // 互动是一个**瞬时**情绪，优先于基础情绪，但只持续很短时间。
@@ -206,6 +232,9 @@ export class Perception {
       workModeReason: work.reason,
       emotion: this.#emotion,
       physiology: this.#physiology,
+      relationship: this.#relationship,
+      mood: this.#forcedMood ?? relationshipMood(this.#relationship),
+      misses: missesUser(this.#relationship),
       sameCategoryMs,
       sampledAt: now,
       uptimeMs: now - this.#startedAt,
@@ -250,6 +279,21 @@ export class Perception {
     this.#forcedEmotion = emotion
   }
 
+  /**
+   * 强制把关系基调锁成某个值（**仅供取证**）。
+   *
+   * 同样是为了取证：关系是**长期**变量，`reserved` 要相处好几天才到 `warm`，
+   * 想核对"三种基调画出来有什么不同"不可能靠真实演进。
+   *
+   * ⚠️ 它只改**表现基调**，不改关系的三个百分比本身，
+   *    也不改变"是否回应"——后者本来就不看关系（ADR-0003）。
+   */
+  #forcedMood: RelationshipMood | null = null
+
+  forceMood(mood: RelationshipMood | null): void {
+    this.#forcedMood = mood
+  }
+
   /** 给调试面板用的可读摘要。**不含任何用户内容**（只有进程名与聚合量）。 */
   describe(): string[] {
     const s = this.#snapshot
@@ -263,6 +307,13 @@ export class Perception {
       `生理：精力 ${pct(s.physiology.energy)} / 饥饿 ${pct(s.physiology.hunger)} / 无聊 ${pct(
         s.physiology.boredom,
       )} / 社交 ${pct(s.physiology.social)}`,
+      // 关系单独一行，并**同时打印基调与想念标记**：
+      // 三个百分比本身看不出"所以它现在会怎么表现"，而那才是要看的东西。
+      `关系：好感 ${pct(s.relationship.affection)} / 信任 ${pct(
+        s.relationship.trust,
+      )} / 默契 ${pct(s.relationship.rapport)}  →  强度 ${pct(
+        relationshipStrength(s.relationship),
+      )} 基调 ${s.mood}${s.misses ? '（想念）' : ''}`,
       `同类工具连续：${String(Math.round(s.sameCategoryMs / 1000))}s`,
       `已运行：${String(Math.round(s.uptimeMs / 1000))}s`,
     ]
