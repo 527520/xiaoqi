@@ -1,0 +1,25 @@
+# 统一换行符，避免 Windows/macOS 协作时整个文件被标为改动
+* text=auto eol=lf
+
+# Windows 专用脚本保留 CRLF
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 二进制
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.node binary
+*.db binary
+
+# 让 diff 更可读
+*.md text diff=markdown
+package-lock.json -diff
+pnpm-lock.yaml -diff
