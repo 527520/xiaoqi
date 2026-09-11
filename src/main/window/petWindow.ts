@@ -213,12 +213,7 @@ export class PetWindowController {
     const localY = (point.y - b.y) / s
 
     const size = PET_GEOMETRY.window.width
-    if (
-      localX < -reach ||
-      localY < -reach ||
-      localX > size + reach ||
-      localY > size + reach
-    ) {
+    if (localX < -reach || localY < -reach || localX > size + reach || localY > size + reach) {
       return null
     }
     return { x: localX, y: localY }

@@ -51,7 +51,11 @@ export function scalePetGeometry(geometry: PetGeometry, scale: number): PetGeome
       ry: s(geometry.body.ry),
     },
     earLeft: { cx: s(geometry.earLeft.cx), cy: s(geometry.earLeft.cy), r: s(geometry.earLeft.r) },
-    earRight: { cx: s(geometry.earRight.cx), cy: s(geometry.earRight.cy), r: s(geometry.earRight.r) },
+    earRight: {
+      cx: s(geometry.earRight.cx),
+      cy: s(geometry.earRight.cy),
+      r: s(geometry.earRight.r),
+    },
     tailTip: { cx: s(geometry.tailTip.cx), cy: s(geometry.tailTip.cy), r: s(geometry.tailTip.r) },
   }
 }

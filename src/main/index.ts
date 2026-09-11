@@ -139,7 +139,10 @@ function refreshTrayMenu(): void {
       // 无法显示当前档），而档位一眼看得出选中的是哪个。
       label: '大小',
       submenu: PET_SCALE_STEPS.map((step) => ({
-        label: step === 1 ? `${String(Math.round(step * 100))}%（默认）` : `${String(Math.round(step * 100))}%`,
+        label:
+          step === 1
+            ? `${String(Math.round(step * 100))}%（默认）`
+            : `${String(Math.round(step * 100))}%`,
         type: 'radio' as const,
         checked: Math.abs((controller?.scale ?? 1) - step) < 0.001,
         click: () => {

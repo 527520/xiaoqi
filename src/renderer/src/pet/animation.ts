@@ -61,7 +61,10 @@ export interface BreathPose {
  * 单纯的上下浮动：前者读起来像"在呼吸"，后者读起来像"在飘"。
  * 幅度刻意很小（3.5%）——再大就变成"喘"。
  */
-export function breathPose(elapsedSeconds: number, periodSeconds = BREATH_PERIOD_SECONDS): BreathPose {
+export function breathPose(
+  elapsedSeconds: number,
+  periodSeconds = BREATH_PERIOD_SECONDS,
+): BreathPose {
   const breath = Math.sin(elapsedSeconds * ((Math.PI * 2) / periodSeconds))
   return {
     breath,
@@ -113,9 +116,7 @@ export function bounceEnvelope(progress: number): number {
   if (progress <= 0 || progress >= 1) return 0
   // 归一化到 [0,1] 的"距离峰值"再折回包络高度。
   // 上升段用 0.7 次幂（快起），下降段用 1.8 次幂（慢落）。
-  return progress < 0.5
-    ? Math.pow(progress * 2, 0.7)
-    : Math.pow((1 - progress) * 2, 1.8)
+  return progress < 0.5 ? Math.pow(progress * 2, 0.7) : Math.pow((1 - progress) * 2, 1.8)
 }
 
 /**

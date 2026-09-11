@@ -40,6 +40,25 @@ export interface Platform {
    * 返回 `null` 表示不可用。调用方不得假设总有值。
    */
   getIdleMilliseconds(): number | null
+
+  /**
+   * 前台窗口所属进程的**可执行文件名**（小写、不含路径），例如 `code.exe`。
+   *
+   * ⚠️★ **只取进程名，永不取窗口标题。** ★
+   *
+   * 这是 `docs/adr/0002` 与施工令 §1.1④ 的核心约束，也是本产品隐私承诺的落点：
+   * 实测证明浏览器窗口标题等于网页内容摘要（`msedge :: 升级 PowerShell 并安装 rg
+   * — DeepSeek Harness 和另外 5 个页面`）—— 拿到标题就等于拿到了内容级信息。
+   *
+   * 因此本方法**不得**调用 `GetWindowText` 一类的 API，也不得返回任何
+   * 由窗口内容派生的字符串。它只回答"用户在用什么软件"，
+   * 不回答"用户在看什么"。README 里对用户的原话是：
+   * **"它只会认得你在用什么软件，不知道你在看什么。"**
+   *
+   * 返回 `null` 表示拿不到（前台窗口属于受保护进程、已退出、或调用失败）。
+   * 调用方必须容忍，不得假设总有值。
+   */
+  getForegroundProcessName(): string | null
 }
 
 /**
@@ -88,12 +107,27 @@ export function selfCheckPlatform(platform: Platform): {
   try {
     const idle = platform.getIdleMilliseconds()
     if (idle === null) {
-      messages.push('⚠️ getIdleMilliseconds 返回 null（会话可能已锁定），M2 感知将不可用。')
+      messages.push('⚠️ getIdleMilliseconds 返回 null（会话可能已锁定），感知层将不可用。')
     } else {
       messages.push(`✓ GetLastInputInfo 调用成功，空闲 ${String(Math.round(idle / 1000))}s`)
     }
   } catch (error) {
     messages.push(`✗ getIdleMilliseconds 抛异常：${String(error)}`)
+    return { ok: false, messages }
+  }
+
+  // 前台进程名也做一次真实调用。
+  // 它比前两项更容易出错（要 OpenProcess + QueryFullProcessImageNameW 两步，
+  // 而且受保护进程会被拒绝），所以必须当场验证而不是等用户发现"它不认得我的软件"。
+  try {
+    const name = platform.getForegroundProcessName()
+    if (name === null) {
+      messages.push('⚠️ getForegroundProcessName 返回 null（前台可能是受保护进程）——不影响运行。')
+    } else {
+      messages.push(`✓ 前台进程名可读：${name}`)
+    }
+  } catch (error) {
+    messages.push(`✗ getForegroundProcessName 抛异常：${String(error)}`)
     return { ok: false, messages }
   }
 

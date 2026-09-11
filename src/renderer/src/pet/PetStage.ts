@@ -133,7 +133,8 @@ export class PetStage {
         const dl = PET_GEOMETRY.earLeft
         const dr = PET_GEOMETRY.earRight
         const dt = PET_GEOMETRY.tailTip
-        const inEllipse = ((x - b.cx * s) / (b.rx * s)) ** 2 + ((y - b.cy * s) / (b.ry * s)) ** 2 <= 1
+        const inEllipse =
+          ((x - b.cx * s) / (b.rx * s)) ** 2 + ((y - b.cy * s) / (b.ry * s)) ** 2 <= 1
         const inCircle = (c: { cx: number; cy: number; r: number }): boolean =>
           (x - c.cx * s) ** 2 + (y - c.cy * s) ** 2 <= (c.r * s) ** 2
         return inEllipse || inCircle(dl) || inCircle(dr) || inCircle(dt)
@@ -481,7 +482,8 @@ export class PetStage {
     const g = this.#eyes
     g.clear()
 
-    const openness = this.mode === 'silent' ? 0.12 : eyeOpenness(this.#blink, BLINK_DURATION_SECONDS)
+    const openness =
+      this.mode === 'silent' ? 0.12 : eyeOpenness(this.#blink, BLINK_DURATION_SECONDS)
     const happy = bounce > 0.25
 
     for (const eye of [PET_FACE.eyeLeft, PET_FACE.eyeRight]) {

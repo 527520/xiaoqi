@@ -52,6 +52,41 @@ const GetLastInputInfo = user32.func('bool __stdcall GetLastInputInfo(_Inout_ LA
 // 不要对它调用 BigInt()——施工令 §4.3⑤ 明确提示过。
 const GetTickCount64 = kernel32.func('uint64 __stdcall GetTickCount64()')
 
+// ── 前台进程名 ──
+//
+// 三步：GetForegroundWindow → GetWindowThreadProcessId → OpenProcess + QueryFullProcessImageNameW。
+//
+// ⚠️★ 这里**故意没有** `GetWindowTextW`。★
+//    读窗口标题是本产品明令禁止的（施工令 §1.1④ / ADR-0002）：
+//    实测浏览器标题就是网页内容摘要。只取进程名，不取标题——
+//    这不是"暂时不做"，是产品红线，请勿添加。
+const GetForegroundWindow = user32.func('uintptr __stdcall GetForegroundWindow()')
+const GetWindowThreadProcessId = user32.func(
+  'uint32 __stdcall GetWindowThreadProcessId(uintptr hWnd, _Out_ uint32 *lpdwProcessId)',
+)
+const OpenProcess = kernel32.func(
+  'uintptr __stdcall OpenProcess(uint32 access, bool inherit, uint32 pid)',
+)
+const CloseHandle = kernel32.func('bool __stdcall CloseHandle(uintptr handle)')
+// `QueryFullProcessImageNameW` 要宽字符缓冲；`_Out_ char16_t *` + Buffer 让 koffi
+// 自己处理编码（施工令附录提到 verify/ 里也是这么做的：用 Buffer 重载接收指针）。
+const QueryFullProcessImageNameW = kernel32.func(
+  'bool __stdcall QueryFullProcessImageNameW(uintptr hProcess, uint32 flags, _Out_ char16_t *buf, _Inout_ uint32 *size)',
+)
+
+/** `PROCESS_QUERY_LIMITED_INFORMATION` = 0x1000，权限最小、够用。 */
+const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+/** 路径缓冲：上限 32768 个 UTF-16 字符（Windows 长路径上限）的保守取值。 */
+const PROCESS_PATH_CHARS = 1024
+
+/**
+ * 复用路径缓冲，避免每次轮询都分配几十 KB。
+ * 感知轮询是秒级频率，但仍没必要每次都新建。
+ */
+const processPathBuffer = Buffer.alloc(PROCESS_PATH_CHARS * 2)
+const processPathSize = [PROCESS_PATH_CHARS]
+
 const LASTINPUTINFO_SIZE = koffi.sizeof(LASTINPUTINFO)
 
 /**
@@ -113,5 +148,66 @@ export const win32Platform: Platform = {
     // GetTickCount64 是 32 位回绕安全的，但理论上仍可能出现负值
     // （例如 dwTime 来自尚未同步的时钟）。夹到 0 比返回负数安全。
     return idle >= 0 ? idle : null
+  },
+
+  /**
+   * 前台窗口所属进程的**可执行文件名**（小写、不含路径）。
+   *
+   * ★ 隐私红线：本函数**只读进程名，绝不读窗口标题**。★
+   * 理由见 `./index.ts` 的接口注释与 `docs/adr/0002`：
+   * 实测浏览器窗口标题等于网页内容摘要，拿到它等于拿到内容级信息。
+   *
+   * 实现要点与失败模式：
+   * - `GetForegroundWindow` 可能返回 0（没有前台窗口，例如切到安全桌面）；
+   * - UWP 应用的前台窗口属于 `ApplicationFrameHost`，进程名会是它而不是真实应用——
+   *   这是**已知的精度损失**，接受它（不为了更准去读标题）；
+   * - 提权窗口 / 受保护进程：`OpenProcess` 会被拒绝 → 返回 `null`，
+   *   调用方按"未知"处理，不要报错、不要重试提权。
+   */
+  getForegroundProcessName(): string | null {
+    let handle = 0
+    try {
+      const hwnd = GetForegroundWindow() as unknown as number
+      if (!hwnd) return null
+
+      const pidOut: [number] = [0]
+      GetWindowThreadProcessId(hwnd, pidOut)
+      const pid: number = pidOut[0]
+      if (!pid) return null
+
+      // koffi 的 `uintptr` 返回 number（不是 bigint），所以这里不需要断言。
+      handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) as number
+      if (!handle) return null // 受保护进程会被拒绝——这是正常的，不是错误
+
+      processPathBuffer.fill(0)
+      processPathSize[0] = PROCESS_PATH_CHARS
+      const ok = QueryFullProcessImageNameW(handle, 0, processPathBuffer, processPathSize) as
+        | boolean
+        | number
+      if (!ok) return null
+
+      // `size` 被写回成**不含结尾 NUL 的字符数**。
+      const chars: number = processPathSize[0]
+      if (!chars) return null
+      const fullPath = processPathBuffer.toString('utf16le', 0, chars * 2)
+
+      // 只取文件名部分。同时兼容 `\` 与 `/`（后者理论上有，防呆）。
+      const lastSep = Math.max(fullPath.lastIndexOf('\\'), fullPath.lastIndexOf('/'))
+      const name = lastSep >= 0 ? fullPath.slice(lastSep + 1) : fullPath
+      return name ? name.toLowerCase() : null
+    } catch {
+      // 会话切换、句柄失效等。返回 null 而不是抛异常：
+      // 调用方在轮询路径上，一次失败不该中断整个宠物。
+      return null
+    } finally {
+      // 句柄必须关，否则每秒轮询会稳定泄漏内核对象。
+      if (handle) {
+        try {
+          CloseHandle(handle)
+        } catch {
+          // 关闭失败无可挽回，忽略。
+        }
+      }
+    }
   },
 }
