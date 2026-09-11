@@ -1,6 +1,15 @@
 import { join } from 'node:path'
 
-import { type BrowserWindow, Menu, Tray, app, globalShortcut, ipcMain, nativeImage } from 'electron'
+import {
+  type BrowserWindow,
+  Menu,
+  Tray,
+  app,
+  globalShortcut,
+  ipcMain,
+  nativeImage,
+  powerMonitor,
+} from 'electron'
 
 import { describeUserNotificationState } from '@shared/geometry'
 import { PET_SCALE_DEFAULT, PET_SCALE_STEPS } from '@shared/constants'
@@ -525,6 +534,48 @@ function openLedger(): void {
 }
 
 /**
+ * 监听系统电源/会话事件（施工令 §5 M2 的「**事件驱动**」）。
+ *
+ * ── 为什么光有轮询不够 ──
+ *
+ * 轮询解决的问题是"多久看一眼"，它解决不了"这一眼与上一眼之间机器睡着了"。
+ * 合盖 8 小时再打开，`tick()` 算出 `elapsedMs = 8 小时`，
+ * 于是生理按"用户连续工作 8 小时"推进——精力归零、饥饿拉满，
+ * 宠物一睁眼就是快饿死的委屈样。
+ *
+ * ★ 这不只是观感问题：它**凭空造出了一段不存在的用户行为**，
+ *   而 §1.2⑦ 明令「宠物不衡量用户」。所以这是一个必须显式处理的正确性问题，
+ *   不是打磨项。
+ *
+ * `Perception.tick()` 里另有一道**时间跳变兜底**（间隔超过 5 分钟即判定休眠）——
+ * 两道防线是刻意的：事件在某些平台/某些休眠形态下会漏，
+ * 而漏掉的后果是"宠物凭空受了一天罪"，代价不对称。
+ */
+function registerPowerEvents(): void {
+  // 恢复：把"上一次采样到现在"这段间隔显式交给感知器判定。
+  // 不让它传 `Infinity` 是因为感知器的入参约定是"真实毫秒数"，
+  // 用一个哨兵值会让那个函数多一条只有调用方知道的隐含分支。
+  // 这里直接算真实的 `now - lastSampleAt`，感知器按 5 分钟阈值自己判定。
+  const compensate = (why: string): void => {
+    const gap = Date.now() - (perception?.lastSampleAt ?? Date.now())
+    perception?.noteSuspend(gap)
+    log(`${why} → 已补偿（间隔 ${String(Math.round(gap / 1000))}s，生理不按"连续工作"推进）`)
+    broadcastState()
+  }
+
+  // 合盖/睡眠后恢复。
+  powerMonitor.on('resume', () => {
+    compensate('系统从休眠中恢复')
+  })
+
+  // 锁屏/解锁同样属于"用户不在"。只处理解锁——锁屏那一刻用户还在，
+  // 且随后必然还有一次 tick 把间隔记上。
+  powerMonitor.on('unlock-screen', () => {
+    compensate('屏幕已解锁')
+  })
+}
+
+/**
  * 启动后自动打开记忆账本（仅当 `XIAOQI_OPEN_LEDGER_MS=<延迟毫秒>`）。
  *
  * ── 为什么需要这个开关 ──
@@ -749,6 +800,7 @@ function bootstrap(): void {
   registerIpc()
   createTray()
   registerShortcuts()
+  registerPowerEvents()
   scheduleLedgerIfRequested()
 }
 

@@ -49,6 +49,30 @@ function setup(
   }
 }
 
+/**
+ * 按**真实轮询节奏**推进一小时，返回结束时的精力值。
+ *
+ * 为什么要这个辅助函数而不是 `advance(3600_000)` 一次跳完：
+ * 感知器里加了**休眠补偿**——单次间隔超过 5 分钟就判定为
+ * "机器睡着了"，生理不推进。一次跳 1 小时正好落进那条分支，
+ * 于是"生理随时间下降"这条断言会因为**推进方式不真实**而失败。
+ *
+ * 这也顺带说明：这个辅助函数让测试更接近真实运行
+ * （生产里就是每 2 秒一拍），而不是为了迁就实现而写的绕路。
+ */
+function tickForAnHour(
+  perception: Perception,
+  advance: (ms: number) => void,
+  stepMs = 2000,
+): number {
+  let energy = 0
+  for (let elapsed = 0; elapsed < 60 * 60 * 1000; elapsed += stepMs) {
+    advance(stepMs)
+    energy = perception.tick().physiology.energy
+  }
+  return energy
+}
+
 describe('感知轮询', () => {
   it('读三项信号并推断工作模式', () => {
     const { perception } = setup({ processName: 'code.exe' })
@@ -97,16 +121,19 @@ describe('感知轮询', () => {
   it('生理量随时间演进：干活时精力下降', () => {
     const { perception, advance } = setup({ processName: 'code.exe' })
     const before = perception.tick().physiology.energy
-    advance(60 * 60 * 1000) // 1 小时
-    const after = perception.tick().physiology.energy
+    // ⚠️ 必须按**真实轮询节奏**推进（每拍若干秒），不能一次 advance(1 小时)。
+    //    一次跳 1 小时会被休眠补偿判定为"机器睡着了"（间隔 > 5 分钟），
+    //    于是生理不推进——那正是它该做的事。
+    //    这两条测试初版就是一次跳 1 小时，加了休眠补偿后立刻变红，
+    //    但它们想验证的"生理随时间长"本身没有问题，错的是推进方式。
+    const after = tickForAnHour(perception, advance)
     expect(after).toBeLessThan(before)
   })
 
   it('休息时精力回升', () => {
     const { perception, advance } = setup({ processName: 'code.exe', idleMs: 30 * 60 * 1000 })
     const before = perception.tick().physiology.energy
-    advance(60 * 60 * 1000)
-    const after = perception.tick().physiology.energy
+    const after = tickForAnHour(perception, advance)
     expect(after).toBeGreaterThan(before)
   })
 
@@ -234,5 +261,85 @@ describe('关系层接入状态引擎', () => {
     expect(lines).not.toMatch(/https?:\/\//)
     expect(lines).not.toMatch(/[A-Za-z]:\\/)
     expect(lines).not.toMatch(/标题[：:]/)
+  })
+})
+
+describe('★ 休眠补偿（事件驱动）：不能把"机器睡着了"算成"用户连续工作"', () => {
+  const HOUR_MS = 60 * 60 * 1000
+
+  it('普通轮询间隔不会被误判为休眠', () => {
+    const { perception, advance } = setup({ processName: 'code.exe' })
+    perception.tick()
+    advance(30_000) // 30 秒，正常范围内
+    const state = perception.tick()
+
+    expect(state.lastSuspendMs).toBe(0)
+  })
+
+  it('★ 时间跳变超过阈值 → 判定为休眠，生理**不**按"连续工作"推进', () => {
+    const { perception, advance } = setup({ processName: 'code.exe' })
+    const before = perception.tick()
+
+    // 合盖 8 小时后回来。
+    advance(8 * HOUR_MS)
+    const after = perception.tick()
+
+    // 精力不该因为"连续工作 8 小时"而掉下去。
+    // 8 小时按 coding 速率是 -8%/小时 ⇒ 会掉 64 个百分点，一眼可辨。
+    expect(after.physiology.energy).toBeGreaterThan(before.physiology.energy - 0.1)
+    // 饥饿也不该被拉满：8 小时 × 5%/小时 = +40 个百分点。
+    expect(after.physiology.hunger).toBeLessThan(before.physiology.hunger + 0.1)
+    // 而且这件事要**可见**。
+    expect(after.lastSuspendMs).toBeGreaterThan(0)
+  })
+
+  it('★ 休眠期间的"想念"有上限——离开 12 天与离开 12 小时结算相同', () => {
+    const half = setup({ processName: 'code.exe' })
+    const halfBefore = half.perception.tick()
+    half.advance(12 * HOUR_MS)
+    const halfAfter = half.perception.tick()
+
+    const long = setup({ processName: 'code.exe' })
+    const longBefore = long.perception.tick()
+    long.advance(12 * 24 * HOUR_MS)
+    const longAfter = long.perception.tick()
+
+    const halfDrop = halfBefore.relationship.affection - halfAfter.relationship.affection
+    const longDrop = longBefore.relationship.affection - longAfter.relationship.affection
+
+    // 上限生效：离开再久，一次结算也不会比"离开半天"更重。
+    expect(longDrop).toBeCloseTo(halfDrop, 10)
+    // 而且掉得很少（想念不是惩罚）。
+    expect(longDrop).toBeLessThan(0.02)
+  })
+
+  it('★ 休眠不会把关系打到原点（出差两周回来关系还在）', () => {
+    const { perception, advance } = setup({ processName: 'code.exe' })
+    perception.tick()
+    advance(14 * 24 * HOUR_MS)
+    const after = perception.tick()
+
+    expect(after.relationship.affection).toBeGreaterThan(0.2)
+    expect(after.misses).toBe(false)
+  })
+
+  it('noteSuspend 对正常间隔直接忽略（不会被外部误调用搞坏）', () => {
+    const { perception } = setup({ processName: 'code.exe' })
+    perception.tick()
+    expect(perception.noteSuspend(1000)).toBe(0)
+    expect(perception.noteSuspend(Number.NaN)).toBe(0)
+    expect(perception.snapshot?.lastSuspendMs).toBe(0)
+  })
+
+  it('★ lastSampleAt 不被补偿清零（外部要靠它算真实间隔）', () => {
+    const { perception, advance } = setup({ processName: 'code.exe' })
+    perception.tick()
+    const first = perception.lastSampleAt
+
+    advance(8 * HOUR_MS)
+    perception.tick()
+
+    // 真的前进了 8 小时——若被清零，powerMonitor 的处理器就会算错间隔。
+    expect(perception.lastSampleAt - first).toBe(8 * HOUR_MS)
   })
 })

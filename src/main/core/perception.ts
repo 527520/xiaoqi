@@ -76,6 +76,13 @@ export interface PerceivedState {
    * （本机第一次跑调试面板时就没法判断——20 秒内所有数字都没变）。
    */
   readonly uptimeMs: number
+  /**
+   * 最近一次被判定为"休眠"的时间跳变（毫秒）；没有过则为 0。
+   *
+   * 单列出来是为了让这件事**可见**：否则"合盖 8 小时后宠物为什么没饿"
+   * 只能靠读代码才知道，而调试面板上看不出它发生过。
+   */
+  readonly lastSuspendMs: number
 }
 
 export interface PerceptionOptions {
@@ -118,8 +125,12 @@ export class Perception {
   #category: AppCategory = 'unknown'
   #sameCategorySince = 0
   #lastStepAt = 0
+  /** 最近一次采样的时刻。与 `#lastStepAt` 不同：这个**不被休眠补偿清零**， 供外部算真实间隔。 */
+  #lastSampleAt = 0
   #startedAt = 0
   #hadInteraction = false
+  /** 最近一次被判定为"休眠"的时间跳变（毫秒）。仅用于调试面板。 */
+  #lastSuspendMs = 0
   #snapshot: PerceivedState | null = null
 
   constructor(options: PerceptionOptions) {
@@ -140,6 +151,7 @@ export class Perception {
     // 或将来某个直接调 tick 的地方），就会静默地算出一个荒谬的值。
     const now = this.#now()
     this.#lastStepAt = now
+    this.#lastSampleAt = now
     this.#sameCategorySince = now
     this.#startedAt = now
     this.#emotion = { emotion: 'calm', since: now }
@@ -147,6 +159,17 @@ export class Perception {
 
   get snapshot(): PerceivedState | null {
     return this.#snapshot
+  }
+
+  /**
+   * 最近一次采样的时刻（毫秒）。
+   *
+   * 与 `#lastStepAt` 的区别：那个在休眠补偿时会被**清零重置**，
+   * 这个始终是"真的采样时刻"。外部（`powerMonitor` 的处理器）
+   * 需要算**真实间隔**才能判断该不该补偿，所以必须拿这个。
+   */
+  get lastSampleAt(): number {
+    return this.#lastSampleAt
   }
 
   start(): void {
@@ -169,12 +192,69 @@ export class Perception {
   }
 
   /**
+   * 机器休眠过（合盖、睡眠、或时钟跳变）。由 `powerMonitor` 事件或
+   * `tick()` 里的时间跳变检测调用。
+   *
+   * ── 为什么这件事必须被显式处理，而不是让时间自然流逝 ──
+   *
+   * 休眠期间**用户什么都没做**。若把这段时间按"正在工作"喂给生理曲线，
+   * 就会凭空造出一段不存在的用户行为，宠物醒来时表现成
+   * "你连续工作了一整天"——那是**在拿用户没做的事评价他**，
+   * 与 §1.2⑦「宠物不衡量用户」直接冲突。
+   *
+   * 正确处理只有两种：
+   * - **生理不推进**（它没有陪你熬过那段时间）；
+   * - **关系温和地"想念"一下**，且**有上限**——想念不是惩罚，
+   *    不能让"出差两周"把关系打回原点。这里的上限就是
+   *    `SUSPEND_MISS_CAP_MS`（按 12 小时结算），
+   *    所以离开再久，一次结算也不会比"离开半天"更重。
+   *
+   * @returns 被"忽略"掉的毫秒数（供调试面板显示，让这件事可见）
+   */
+  noteSuspend(gapMs: number): number {
+    if (!Number.isFinite(gapMs) || gapMs <= SUSPEND_GAP_MS) return 0
+    this.#noteSuspend(gapMs)
+    return gapMs
+  }
+
+  #noteSuspend(gapMs: number): void {
+    // 关系按"想念"结算，但**封顶**。用户休假回来该感到被想念，
+    // 而不是感到被记账。
+    const billable = Math.min(gapMs, SUSPEND_MISS_CAP_MS)
+    this.#relationship = stepRelationship(this.#relationship, billable, 'rest', {
+      positiveInteraction: false,
+    })
+    this.#lastSuspendMs = gapMs
+  }
+
+  /**
    * 推进一拍。公开是为了让测试能手动驱动，不必等真实计时器。
    */
   tick(): PerceivedState {
     const now = this.#now()
-    const elapsedMs = Math.max(0, now - this.#lastStepAt)
+    let elapsedMs = Math.max(0, now - this.#lastStepAt)
     this.#lastStepAt = now
+    this.#lastSampleAt = now
+
+    // ── ★ 事件驱动的休眠补偿 ──
+    //
+    // 轮询只管"多久看一眼"，管不了"这一眼与上一眼之间机器有没有睡着"。
+    // 合盖 8 小时再打开时，`now - lastStepAt` 就是 8 小时，
+    // 于是生理会按"用户连续工作了 8 小时"推进：精力归零、饥饿拉满，
+    // 宠物一睁眼就是一副快饿死的委屈样。
+    //
+    // 这不只是观感问题——**它把一个不存在的"用户行为"编进了状态**，
+    // 正好踩在 §1.2⑦「宠物不衡量用户」那条禁令上。
+    //
+    // 所以：超过阈值的时间跳变按**挂起**处理，生理不推进，
+    // 只把关系按"想念"温和地结算一点（见下面的处理），
+    // 并把这一拍的 elapsed 归零。
+    // 阈值取 5 分钟：正常轮询是 2 秒，任何超过 5 分钟的间隔都只可能是
+    // 挂起/休眠/时钟跳变，而不是"我们在专心工作"。
+    if (elapsedMs > SUSPEND_GAP_MS) {
+      this.#noteSuspend(elapsedMs)
+      elapsedMs = 0
+    }
 
     // ── 读三项信号 ──
     const processName = this.#platform.getForegroundProcessName()
@@ -238,6 +318,7 @@ export class Perception {
       sameCategoryMs,
       sampledAt: now,
       uptimeMs: now - this.#startedAt,
+      lastSuspendMs: this.#lastSuspendMs,
     }
     this.#snapshot = state
     this.#onState?.(state)
@@ -315,6 +396,12 @@ export class Perception {
         relationshipStrength(s.relationship),
       )} 基调 ${s.mood}${s.misses ? '（想念）' : ''}`,
       `同类工具连续：${String(Math.round(s.sameCategoryMs / 1000))}s`,
+      // 只在真的发生过休眠时才打这一行——它是异常事件，不是常态。
+      ...(s.lastSuspendMs > 0
+        ? [
+            `休眠补偿：最近一次时间跳变 ${String(Math.round(s.lastSuspendMs / 60000))} 分钟（生理未推进）`,
+          ]
+        : []),
       `已运行：${String(Math.round(s.uptimeMs / 1000))}s`,
     ]
   }
@@ -329,3 +416,21 @@ function pct(value: number): string {
  * 略长于主进程那边的交互动画时长（0.95s），让表情先于动作结束。
  */
 const INTERACTION_EMOTION_WINDOW_MS = 1200
+
+/**
+ * 超过这个间隔就认为机器休眠过，而不是"用户一直在工作"。
+ *
+ * 取 5 分钟：正常轮询是 2 秒，所以任何超过 5 分钟的间隔
+ * 都只可能是挂起/休眠/时钟跳变。留这么宽的余量是为了容忍
+ * 系统卡顿与定时器被节流，不至于把普通抖动误判成休眠。
+ */
+export const SUSPEND_GAP_MS = 5 * 60 * 1000
+
+/**
+ * 一次休眠最多按多久结算关系（12 小时）。
+ *
+ * ★ 这个上限是 ADR-0003 的守卫：**想念不能变成记账**。
+ *   出差两周回来，关系该是"想你了"，而不是"你欠我两周"。
+ *   封顶之后，离开 12 小时与离开 12 天的结算结果完全相同。
+ */
+export const SUSPEND_MISS_CAP_MS = 12 * 60 * 60 * 1000

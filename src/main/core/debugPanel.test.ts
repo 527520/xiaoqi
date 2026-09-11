@@ -21,6 +21,7 @@ function state(overrides: Partial<PerceivedState> = {}): PerceivedState {
     sameCategoryMs: 0,
     sampledAt: 0,
     uptimeMs: 0,
+    lastSuspendMs: 0,
     ...overrides,
   }
 }
