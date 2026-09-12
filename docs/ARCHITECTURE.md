@@ -86,21 +86,37 @@ Win32 (koffi)                       Electron
 定义在 `src/shared/ipc.ts`。preload **只暴露这些通道**，不暴露 `ipcRenderer` 本身
 （一旦整个交出去，白名单就形同虚设）。
 
-| 通道             | 方向      | 类型         | 载荷                                 | 说明                            |
-| ---------------- | --------- | ------------ | ------------------------------------ | ------------------------------- |
-| `state:get`      | 渲染 → 主 | invoke       | — → `PetRuntimeState`                | 启动时拉一次完整快照            |
-| `mode:set`       | 渲染 → 主 | invoke       | `VisibilityMode` → `PetRuntimeState` | 手动设置形态                    |
-| `pet:interact`   | 渲染 → 主 | send         | —                                    | 用户点了宠物                    |
-| `pet:animating`  | 渲染 → 主 | send         | `boolean`                            | 交互动画开始/结束，用于帧率降档 |
-| `renderer:error` | 渲染 → 主 | **sendSync** | `message, stack`                     | 未捕获错误 + 堆栈 → 主进程日志  |
-| `state:changed`  | 主 → 渲染 | on           | `PetRuntimeState`                    | 状态变化推送                    |
+| 通道                      | 方向      | 类型         | 载荷                                 | 说明                                     |
+| ------------------------- | --------- | ------------ | ------------------------------------ | ---------------------------------------- |
+| `state:get`               | 渲染 → 主 | invoke       | — → `PetRuntimeState`                | 启动时拉一次完整快照                     |
+| `mode:set`                | 渲染 → 主 | invoke       | `VisibilityMode` → `PetRuntimeState` | 手动设置形态                             |
+| `scale:set`               | 渲染 → 主 | invoke       | `number` → `PetRuntimeState`         | 设置缩放（渲染进程侧入口，也便于自动化） |
+| `drag:start` / `drag:end` | 渲染 → 主 | send         | `{x,y}`（偏移）                      | 拖动：主进程按偏移跟随光标               |
+| `pet:interact`            | 渲染 → 主 | send         | —                                    | 用户点了宠物                             |
+| `pet:animating`           | 渲染 → 主 | send         | `boolean`                            | 交互动画开始/结束，用于帧率降档          |
+| `sprite:mask`             | 渲染 → 主 | send         | `SpriteMask`（约 600 字节）          | **alpha 命中蒙版**，图集后端用           |
+| `sprite:animation`        | 渲染 → 主 | send         | `CodexAnimationName`                 | 当前动作（蒙版按动作存，据此选表）       |
+| `renderer:error`          | 渲染 → 主 | **sendSync** | `message, stack`                     | 未捕获错误 + 堆栈 → 主进程日志           |
+| `state:changed`           | 主 → 渲染 | on           | `PetRuntimeState`                    | 状态变化推送                             |
+| `memory:*`（5 条）        | 双向      | invoke/on    | 见 §3                                | 记忆账本（M3）                           |
 
 **为什么 `renderer:error` 用 `sendSync`**：宠物启动期的错误可能发生在
 "渲染进程已开始执行、主进程日志却还没建立"的时间窗里，异步消息会晚到甚至丢在
 窗口关闭之后。实测第一次排查时最关键的一条启动期堆栈就是这样丢掉的。
 
-`PetRuntimeState` = `{ mode, cursorRoute, workArea, frameRate }`。
+**为什么蒙版要分两条通道而不是塞进 `state:changed`**：
+`state:changed` 每 80ms 就可能推一次（光标移动），而蒙版是**一次性**的
+（约 600 字节，解码后算一次）。塞进去会让它每帧重复过一遍结构化克隆。
+动作名则相反，它是随状态变的，所以单独一条轻量通道。
+
+`PetRuntimeState` = `{ mode, cursorRoute, workArea, frameRate, scale, cursor,
+workMode, emotion, disturbLevel, mood, pet }`。
 `frameRate` 由**主进程**算，因为只有主进程同时知道"形态"与"是否正在播放交互动画"。
+`pet` = `{ backend, sheetUrl, spriteVersion, displayName }` —— 只推**渲染进程
+无法自己知道**的东西；栅格契约（逐帧时长表）在 `@shared/petAtlas` 里是常量，
+两边 import 同一份，不靠 IPC 传（传过去只会造出"两份可能不一致"的机会）。
+`pet` 与 `scale` 必须在**同一次**快照里到达：渲染进程要按"后端 + 缩放"
+一起决定 canvas 尺寸，分两次会出现一帧用正方形容器画非正方形图集的错位。
 
 ---
 
@@ -292,23 +308,93 @@ CREATE TABLE working (
 
 ---
 
-## 6. 资源包约定（`assets/pets/<名字>/`）
+## 6. 资源包约定（`assets/pets/<名字>/`）—— **已落地**
+
+这一节原本是"将来"的约定，现在已经是**实际实现**（精灵图后端）。
+下面是按实际代码更正后的内容。
+
+### 6.1 目录结构（契约固定，只认这两个文件名）
 
 ```
-assets/pets/xiaoqi/
-  pet.json      # 状态→动画映射、帧尺寸、锚点、各形态参数
-  idle.png      # 精灵图（帧序列）
-  ...
+<宠物目录>/
+  pet.json           元数据
+  spritesheet.webp   图集（无损 RGBA；PNG 也接受，文件名 spritesheet.png）
 ```
 
-v0.1 的默认宠物（小奇）**不用图片**，而是由 `src/renderer/src/pet/PetStage.ts`
-按 `src/shared/constants.ts` 的几何**程序化绘制**——
-所以当前的 `assets/pets/xiaoqi/` 尚未落地为资源包。
-引入资源包（M6 之后的"形象可自定义"）时，`pet.json` 需显式声明
-**帧尺寸**、**图集网格**与**版本号**，并在导入前校验像素尺寸与 alpha 通道，
-不合格**原子拒绝**（临时目录 → rename），绝不半途写入。
+一个目录 = 一只宠物。用 `XIAOQI_PET_DIR=<目录>` 选择；不设时用内置的
+程序化小奇。
 
-调研补充（`docs/RECON.md`）：openpets 用的是 `pet.json` + 精灵表，
-与我们的约定同构；其记录的头号 bug 来源是"新资源协议忘了同时改两处 CSP"。
-本项目当前不用自定义协议，因此**不需要**放开 `index.html` 里的 CSP
-（`default-src 'none'`）；将来若引入，必须两处同步并加启动自检。
+### 6.2 图集契约（来自 Codex 官方 `hatch-pet-v2` skill，Apache-2.0）
+
+|          | V1                             | V2                                |
+| -------- | ------------------------------ | --------------------------------- |
+| 尺寸     | 1536×1872                      | 1536×2288                         |
+| 网格     | 8 列 × 9 行                    | 8 列 × 11 行                      |
+| 单格     | 192×208                        | 192×208                           |
+| 版本字段 | **省略** `spriteVersionNumber` | `spriteVersionNumber: 2`          |
+| 注视方向 | 无                             | 行 9–10 共 16 向（0° = **正上**） |
+
+标准动作 9 个（行 0–8）：`idle` `running-right` `running-left` `waving`
+`jumping` `failed` `waiting` `running` `review`。**逐帧时长表在我们这边**——
+规范明确要求客户端不读图集里的时长，所以换素材时节奏不变，
+换节奏必须改代码（节奏属于宿主，不属于素材）。
+
+唯一真相在 `src/shared/petAtlas.ts`；渲染器、蒙版提取、验证脚本、
+图集生成器全读它，因此"渲染的格"与"判定命中用的格"不可能漂移。
+
+### 6.3 两条渲染后端
+
+|          | 程序化（默认）          | 精灵图                                  |
+| -------- | ----------------------- | --------------------------------------- |
+| 窗口尺寸 | 220×220（正方形）       | 192×208 × 缩放（**不是正方形**）        |
+| 命中判定 | `PET_GEOMETRY` 椭圆并集 | alpha 点阵蒙版（13×16）                 |
+| 情绪表达 | 8 种                    | 最多 4 种（见 `docs/verify-sprite.md`） |
+
+两者提供**同一套对外成员**（`src/renderer/src/pet/petStageContract.ts`），
+两个类都显式 `implements`，少一个成员立刻编译失败——没有这条时
+"两条后端成员一致"只是口头约定，而漏实现的表现是切换后端时的
+运行期 undefined 调用。
+
+尺寸走唯一入口 `petWindowSizeFor(definition, scale)`。
+四条调用路径（主进程放窗、主进程命中、渲染建 canvas、渲染建 hitArea）
+全部读它，所以不可能出现"窗口按正方形开、判定按格子做"的错位。
+
+### 6.4 自定义协议（`xiaoqi-pet://`）
+
+渲染进程是沙箱化的，没有 Node，也不该拿到绝对路径（那等于把"读任意文件"
+通过 `file://` 递出去）。所以素材走一个**只读、只认自己那个目录**的协议：
+
+```
+xiaoqi-pet://sheet/spritesheet.webp
+```
+
+安全边界就是"路径必须落在素材目录内"：只允许**单层文件名**
+（任何子目录与 `..` 一律拒绝），且只放行 `spritesheet.webp` /
+`spritesheet.png` / `pet.json` 三个白名单文件名。
+
+⚠️ **两处 CSP 必须同步，少改一处症状都是"图集永远加载不出来"**：
+
+1. `src/renderer/index.html` 的 `connect-src` 要加 `xiaoqi-pet:`
+   （scheme 限定，不是 `*`）；
+2. `src/main/index.ts` 顶层要调 `declarePetAssetScheme()`，且**必须在
+   `app.ready` 之前**。
+
+另外 `registerSchemesAsPrivileged` 里**必须**给 `corsEnabled: true`，
+响应头里必须显式给 `Access-Control-Allow-Origin: file://`（`*` 对
+"不透明源"不生效）。这两条各自的报错完全不同、指向也不同，
+踩坑记录见 `docs/verify-sprite.md` §5.1–5.2。
+
+### 6.5 素材授权
+
+仓库里**不附带**任何第三方宠物素材。`assets/pets/` 下只有程序化生成的
+测试图集（CC0，且被 `.gitignore` 忽略）。
+
+社区素材（如 `legeling/awesome-codex-pet` 收录的 239 只）**大多是
+CC BY-NC 4.0 非商用授权**——代码 MIT 不等于素材 MIT。所以：
+
+- `pet.json` 的 `license` 会被读出来（裸字符串与官方的
+  `{ name, url, author }` 对象两种写法都认）；
+- 启动日志**必定**打印署名：`宠物形象：<名字> · <作者> · <授权> · V2 图集`。
+
+这不是装饰：授权决定能不能分发，必须在运行时可见，
+而不是埋在某个 README 里等着被忘记。

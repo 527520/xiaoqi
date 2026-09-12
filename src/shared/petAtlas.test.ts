@@ -78,7 +78,10 @@ describe('★ 帧数与行号（规范的逐项复刻）', () => {
   }
 
   it('每个动作的行号与帧数都与规范一致', () => {
-    for (const [name, want] of Object.entries(EXPECTED) as [CodexAnimationName, typeof EXPECTED.idle][]) {
+    for (const [name, want] of Object.entries(EXPECTED) as [
+      CodexAnimationName,
+      typeof EXPECTED.idle,
+    ][]) {
       const spec = CODEX_V2_ATLAS.animations[name]
       expect(spec.row, `${name} 的行号`).toBe(want.row)
       expect(spec.frames, `${name} 的帧数`).toBe(want.frames)

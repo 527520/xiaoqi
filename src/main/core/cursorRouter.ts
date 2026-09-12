@@ -1,4 +1,6 @@
 import { hitTestPetScreenPoint } from '@shared/geometry'
+import { hitTestSpriteMask, type SpriteMask } from '@shared/spriteMask'
+import type { CodexAnimationName } from '@shared/petAtlas'
 import type { CursorRoute, PetGeometry, Point, Rect } from '@shared/types'
 
 /**
@@ -69,4 +71,61 @@ export function resolveCursorRoute(
  */
 export function shouldFlipIgnoreMouseEvents(current: CursorRoute, next: CursorRoute): boolean {
   return current !== next
+}
+
+/**
+ * 精灵图后端的路由决策 —— **纯函数，可单测**。
+ *
+ * ── 为什么不能用几何版本 ──
+ *
+ * `resolveCursorRoute` 用的是 `PET_GEOMETRY` 的椭圆并集，那是**程序化小奇**的
+ * 形状。图集宠物的剪影是不规则的 alpha（一只坐着的猫、一只奔跑的猫各不一样），
+ * 用椭圆套上去必然对不上：要么点到空气，要么身上一块点不到。
+ *
+ * ── 判定顺序与几何版本**刻意保持一致** ──
+ *
+ * 先窗后形：光标不在窗口矩形里就直接穿透（省掉查表，且这是绝大多数时候的情况）。
+ * 顺序不一致会让两条后端在边角情况下表现不同，那种差异极难排查。
+ *
+ * ── ★ 没有蒙版时一律穿透（安全侧）★ ──
+ *
+ * 蒙版要经过"渲染进程解码 → 下采样 → IPC"才到这里。在它到达之前的窗口期里，
+ * 默认判"可点"会让宠物**挡住下层窗口却点不动**——用户会以为应用卡死，
+ * 那是直接卸载级别的故障。反过来只是"宠物暂时点不到"几百毫秒。
+ * 这条取舍在 `shared/spriteMask.ts` 的 `hitTestSpriteMask` 里也写了一遍，
+ * 两处必须一致（有一个测试专门断言它）。
+ *
+ * @param mask 当前整套蒙版；`null` = 还没收到 → 一律穿透
+ * @param animation 当前动作（蒙版按动作存）
+ * @param windowBounds 窗口矩形（DIP）。**注意它已经是缩放后的尺寸**，
+ *        所以下面不需要再乘 `scale`——缩放只影响窗口大小，蒙版按比例铺在窗口里。
+ */
+export function resolveSpriteCursorRoute(
+  mask: SpriteMask | null,
+  animation: CodexAnimationName,
+  windowBounds: Rect,
+  screenPoint: Point,
+): CursorRoute {
+  const insideWindow =
+    screenPoint.x >= windowBounds.x &&
+    screenPoint.x < windowBounds.x + windowBounds.width &&
+    screenPoint.y >= windowBounds.y &&
+    screenPoint.y < windowBounds.y + windowBounds.height
+
+  if (!insideWindow) return 'passthrough'
+  if (!mask) return 'passthrough'
+
+  const entry = mask.masks[animation]
+  if (!entry) return 'passthrough'
+
+  return hitTestSpriteMask(
+    entry,
+    screenPoint.x - windowBounds.x,
+    screenPoint.y - windowBounds.y,
+    windowBounds.width,
+    windowBounds.height,
+    mask.grid,
+  )
+    ? 'pet'
+    : 'passthrough'
 }

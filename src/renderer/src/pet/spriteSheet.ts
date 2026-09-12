@@ -39,11 +39,25 @@ export interface PreparedSpriteSheet {
  *
  * 纯函数，可单测——这是渲染进程里**唯一**需要读懂素材像素的地方，
  * 所以它必须能被喂假像素验证。
+ *
+ * ⚠️ 解码后的像素尺寸要**再校验一次**。主进程已经读过文件头
+ *    （`@shared/webpSize`），但那只覆盖三种容器格式；解码器认得而
+ *    我们的头部解析器读不出的变体会在这里被拦住。
+ *    不定长截断的后果很隐蔽：`cellIsEmpty` 会把越界读到的 `undefined`
+ *    当作 alpha 0，于是**整张图看起来全是空的**——宠物消失，
+ *    而没有任何报错。
  */
 export function prepareSpriteSheet(
   pixels: PixelSource,
   atlas: PetSpriteAtlas,
 ): PreparedSpriteSheet {
+  if (pixels.width !== atlas.atlasWidth || pixels.height !== atlas.atlasHeight) {
+    throw new Error(
+      `图集尺寸与契约不符：应为 ${String(atlas.atlasWidth)}×${String(atlas.atlasHeight)}` +
+        `（V${String(atlas.version)}），实际 ${String(pixels.width)}×${String(pixels.height)}`,
+    )
+  }
+
   const scanned: Partial<Record<CodexAnimationName, number>> = {}
   const playable: Partial<Record<CodexAnimationName, number>> = {}
   let drawnCells = 0

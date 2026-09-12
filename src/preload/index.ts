@@ -39,6 +39,14 @@ const bridge: XiaoqiBridge = {
     ipcRenderer.send(IPC.petAnimating, isAnimating)
   },
 
+  pushSpriteMask: (mask: unknown) => {
+    ipcRenderer.send(IPC.spriteMaskPush, mask)
+  },
+
+  reportSpriteAnimation: (animation: string) => {
+    ipcRenderer.send(IPC.spriteAnimationChanged, animation)
+  },
+
   reportError: (message: string, stack: string) => {
     // 同步发送：启动期的报错必须**当场**写进主进程日志，
     // 异步 send 在窗口刚要关闭时可能来不及送达（实测丢过关键堆栈）。

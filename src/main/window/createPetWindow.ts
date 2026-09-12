@@ -2,7 +2,8 @@ import { join } from 'node:path'
 
 import { BrowserWindow, app } from 'electron'
 
-import { PET_SCALE_DEFAULT, petWindowSize } from '@shared/constants'
+import { PET_SCALE_DEFAULT } from '@shared/constants'
+import { petWindowSizeFor, PROCEDURAL_PET, type PetDefinition } from '@shared/petDefinition'
 
 /**
  * 宠物窗口的构造。
@@ -21,12 +22,19 @@ import { PET_SCALE_DEFAULT, petWindowSize } from '@shared/constants'
  *
  * 另注：`transparent` 窗口**无法**在显示后再切换成不透明，反之亦然。
  * 所以这些参数只在创建时能定，运行期不可改。
+ *
+ * ⚠️ 窗口尺寸走 `petWindowSizeFor(definition, scale)`，**不是**恒为正方形：
+ *    图集宠物的格子是 192×208。硬套正方形会把图横向拉伸约 15%，
+ *    而这件事只在换素材之后才看得出来。
  */
 export function createPetWindow(options: {
   readonly preloadPath: string
   readonly scale?: number
+  /** 宠物定义。缺省 = 内置的程序化小奇（保持既有调用点不变）。 */
+  readonly definition?: PetDefinition
 }): BrowserWindow {
-  const size = petWindowSize(options.scale ?? PET_SCALE_DEFAULT)
+  const definition = options.definition ?? PROCEDURAL_PET
+  const size = petWindowSizeFor(definition, options.scale ?? PET_SCALE_DEFAULT)
 
   const window = new BrowserWindow({
     width: size.width,

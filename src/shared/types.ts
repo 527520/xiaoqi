@@ -186,6 +186,33 @@ export type DisturbLevel = 'silent' | 'low' | 'normal'
  */
 export type CursorRoute = 'pet' | 'passthrough'
 
+/**
+ * 主进程推给渲染进程的**渲染指令**。
+ *
+ * ── 为什么推"指令"而不是推完整定义 ──
+ *
+ * `PetDefinition` 里带着整张图集的栅格契约（9 个动作的逐帧时长表）。
+ * 渲染进程确实需要那份契约，但它**不该靠 IPC 传**——那份数据在
+ * `@shared/petAtlas` 里是常量，两边 import 同一份才是同一个真相。
+ * 传过去只会造出"两处各有一份、可能不一致"的机会。
+ *
+ * 所以这里只传**渲染进程无法自己知道**的东西：跑哪条后端、图集在哪。
+ */
+export interface PetRenderInfo {
+  readonly backend: 'procedural' | 'sprite'
+  /**
+   * 图集的 URL（自定义协议 `xiaoqi-pet://`）；程序化后端为 null。
+   *
+   * 用自定义协议而不是 `file://`：渲染进程是沙箱化的，
+   * 不该获得读任意文件的能力。协议处理器只放行素材目录里的三个白名单文件。
+   */
+  readonly sheetUrl: string | null
+  /** 精灵图版本（决定用哪份栅格契约）；程序化后端为 1（无意义）。 */
+  readonly spriteVersion: number
+  /** 展示名（日志与调试面板用）。 */
+  readonly displayName: string
+}
+
 /** 主进程推给渲染进程的状态快照。渲染层是纯投影，不持有真相。 */
 export interface PetRuntimeState {
   readonly mode: VisibilityMode
@@ -249,6 +276,14 @@ export interface PetRuntimeState {
    * 但应该能**感觉到**它——相处久了它会更主动地凑过来。
    */
   readonly mood: RelationshipMood
+  /**
+   * 当前宠物形象（哪条渲染后端、图集在哪）。
+   *
+   * 加进状态快照而不是单独一条 IPC：它必须与 `scale` **同时到达**——
+   * 渲染进程要按"后端 + 缩放"一起决定 canvas 尺寸，分两次到达会出现
+   * 一帧用正方形容器画非正方形图集的错位。
+   */
+  readonly pet: PetRenderInfo
 }
 
 /**

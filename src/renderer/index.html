@@ -6,17 +6,30 @@
     <!--
       CSP 刻意只允许 'self'。
 
-      小奇不加载任何远程资源、不内联脚本、不 eval——宠物形象是**程序化绘制**的
-      （PixiJS Graphics），不是图片资源，因此连 img-src 都不需要放开。
+      小奇不加载任何远程资源、不内联脚本、不 eval。
+      程序化形象（PixiJS Graphics）不需要任何外部资源，因此 img-src 也不放开。
 
-      注意：这里与 electron.vite.config.ts 没有任何重复配置的机会，
-      因为本项目不使用自定义协议加载素材。将来若引入用户资源包
-      （assets/pets/<名字>/），必须同时改这里和构建配置——
-      参考项目 openpets 把"新协议忘了加进两处 CSP"列为它的头号 bug 来源。
+      ★ 唯一的例外是 `connect-src` 里的 `xiaoqi-pet:`
+        —— 用户素材包（assets/pets/<名字>/）的图集走这条自定义协议加载：
+        `fetch('xiaoqi-pet://sheet/spritesheet.webp')` 之后再解码成像素。
+
+        关于它为什么不违反上面的原则：
+          - 协议处理器（src/main/window/petAssetProtocol.ts）只放行
+            **用户自己指定的那个素材目录**里的三个白名单文件名，
+            路径穿越与未知文件名一律 403；
+          - 放开的是 `connect-src`（fetch/XHR），不是 `script-src`，
+            所以它不会变成一条执行任意代码的路径；
+          - scheme 限定为 `xiaoqi-pet:` 而不是 `*`，别的协议仍然被拒。
+
+        ⚠️ 改这一行之前先读上面那段：参考项目 openpets 把
+           "新协议忘了加进两处 CSP"列为它的头号 bug 来源。
+           本项目的另一处是 `main/index.ts` 顶层的 `declarePetAssetScheme()`
+           （必须在 app.ready 之前跑）。两处少改一处，症状都是
+           "图集永远加载不出来"，而且报错信息看起来与 CSP 无关。
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://localhost:* ws://127.0.0.1:*"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://localhost:* ws://127.0.0.1:* xiaoqi-pet:"
     />
   </head>
   <body>

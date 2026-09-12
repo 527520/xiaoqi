@@ -217,11 +217,60 @@ describe('parsePetManifest：宽容降级的那部分', () => {
   })
 
   it('source 可以给出处链接', () => {
+    const result = parsePetManifest(manifest({ source: 'https://example.com/pet' }), {
+      sheetPixels: V2_PIXELS,
+    })
+    expect(result.definition?.source?.url).toBe('https://example.com/pet')
+  })
+
+  it('★ license 写成对象（Codex 官方生成器的格式）也要读出来', () => {
+    // 官方格式：license 是 { name, url, author }，不是裸字符串。
+    // 只认字符串会让**所有官方格式的包**都被判成"授权未注明"，
+    // 而那条警告的作用正是让授权可见——误报会把它变成被忽略的噪声。
     const result = parsePetManifest(
-      manifest({ source: 'https://example.com/pet' }),
+      {
+        displayName: '官方格式的猫',
+        spriteVersionNumber: 2,
+        license: {
+          name: 'CC0-1.0',
+          url: 'https://creativecommons.org/publicdomain/zero/1.0/',
+          author: '某作者',
+        },
+      },
       { sheetPixels: V2_PIXELS },
     )
-    expect(result.definition?.source?.url).toBe('https://example.com/pet')
+    expect(result.errors).toEqual([])
+    expect(result.warnings).toEqual([])
+    expect(result.definition?.source?.license).toBe('CC0-1.0')
+    expect(result.definition?.source?.author).toBe('某作者')
+    expect(result.definition?.source?.url).toContain('creativecommons.org')
+  })
+
+  it('license 对象里用 id / spdx 命名也认（社区包的变体）', () => {
+    const byId = parsePetManifest(manifest({ license: { id: 'MIT' } }), {
+      sheetPixels: V2_PIXELS,
+    })
+    expect(byId.definition?.source?.license).toBe('MIT')
+    const bySpdx = parsePetManifest(manifest({ license: { spdx: 'Apache-2.0' } }), {
+      sheetPixels: V2_PIXELS,
+    })
+    expect(bySpdx.definition?.source?.license).toBe('Apache-2.0')
+  })
+
+  it('★ 授权块里的作者优先于顶层作者（授权块那个更具体）', () => {
+    const result = parsePetManifest(
+      manifest({ author: '打包的人', license: { name: 'MIT', author: '画画的人' } }),
+      { sheetPixels: V2_PIXELS },
+    )
+    expect(result.definition?.source?.author).toBe('画画的人')
+  })
+
+  it('license 是空对象 / 数组 / 数字时视为没写（不崩，也不误报成有授权）', () => {
+    for (const bad of [{}, [], 42, null]) {
+      const result = parsePetManifest(manifest({ license: bad }), { sheetPixels: V2_PIXELS })
+      expect(result.definition, JSON.stringify(bad)).not.toBeNull()
+      expect(result.warnings.join(), JSON.stringify(bad)).toContain('license')
+    }
   })
 
   it('多余字段被忽略（社区包里有各种自家扩展）', () => {

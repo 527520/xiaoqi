@@ -4,13 +4,20 @@ import {
   CURSOR_POLL_INTERVAL_MS,
   PET_GEOMETRY,
   PET_MARGIN,
-  petWindowSize,
   QUNS_POLL_INTERVAL_MS,
   TOPMOST_REASSERT_INTERVAL_MS,
 } from '@shared/constants'
+import type { CodexAnimationName } from '@shared/petAtlas'
+import { CODEX_V2_ATLAS } from '@shared/petAtlas'
+import { petWindowSizeFor, PROCEDURAL_PET, type PetDefinition } from '@shared/petDefinition'
+import type { SpriteMask } from '@shared/spriteMask'
 import type { CursorRoute, Point, Rect, VisibilityMode } from '@shared/types'
 
-import { resolveCursorRoute, shouldFlipIgnoreMouseEvents } from '../core/cursorRouter'
+import {
+  resolveCursorRoute,
+  resolveSpriteCursorRoute,
+  shouldFlipIgnoreMouseEvents,
+} from '../core/cursorRouter'
 import { frameBudgetChanged, shouldPauseTicker, type FrameBudgetInput } from '../core/frameRate'
 import {
   createModeGateState,
@@ -21,9 +28,23 @@ import {
 } from '../core/modeGate'
 import type { Platform } from '../platform'
 
+/**
+ * 合法的图集动作名。
+ *
+ * 从契约表推出来，**不手写第二份列表**——多一份就多一处漂移，
+ * 而漂移的表现是"某个动作的蒙版永远查不到"（一律穿透，也不报错）。
+ */
+const SPRITE_ANIMATIONS: ReadonlySet<string> = new Set(Object.keys(CODEX_V2_ATLAS.animations))
+
 export interface PetWindowControllerOptions {
   readonly window: BrowserWindow
   readonly platform: Platform
+  /**
+   * 宠物定义（决定窗口尺寸与命中判定方式）。
+   *
+   * 缺省 = 内置的程序化小奇，这样既有的调用点与测试不用改。
+   */
+  readonly definition?: PetDefinition
   /** 状态变化时回调，用于推送给渲染进程与刷新托盘菜单。 */
   readonly onStateChanged: () => void
   readonly logger?: (message: string) => void
@@ -75,15 +96,91 @@ export class PetWindowController {
   #tickCount = 0
   #disposed = false
 
+  /** 宠物定义（决定窗口尺寸与命中判定方式）。 */
+  readonly #definition: PetDefinition
+
+  /**
+   * 精灵图命中蒙版。由渲染进程解码图集后推来（见 `shared/spriteMask.ts`）。
+   *
+   * `null` = 还没收到 → **一律穿透**（安全侧）。理由写在
+   * `core/cursorRouter.ts` 的 `resolveSpriteCursorRoute` 上：
+   * 宠物暂时点不到几百毫秒，远好过"挡住下层窗口却点不动"。
+   */
+  #spriteMask: SpriteMask | null = null
+
+  /**
+   * 渲染进程报告的当前动作。
+   *
+   * 蒙版按动作存，所以必须知道该查哪一张。默认 `idle`——
+   * 哪怕渲染进程一次都没报过，查 idle 也是合理的降级
+   * （宠物绝大多数时间就在 idle）。
+   */
+  #spriteAnimation: CodexAnimationName = 'idle'
+
   constructor(options: PetWindowControllerOptions) {
     this.#window = options.window
     this.#platform = options.platform
+    this.#definition = options.definition ?? PROCEDURAL_PET
     this.#onStateChanged = options.onStateChanged
     this.#log =
       options.logger ??
       ((): void => {
         // 默认不打日志。日志是可选注入的，测试与静默运行时不产生任何输出。
       })
+  }
+
+  /** 当前宠物定义（诊断与验证脚本用）。 */
+  get definition(): PetDefinition {
+    return this.#definition
+  }
+
+  /** 当前是否有可用的精灵图蒙版（诊断用）。 */
+  get hasSpriteMask(): boolean {
+    return this.#spriteMask !== null
+  }
+
+  /**
+   * 按**当前后端**选路由判定。
+   *
+   * 两条后端的差别只有"怎么判断光标在不在剪影上"：
+   *   - 程序化：椭圆并集（`PET_GEOMETRY`），与渲染器同源；
+   *   - 图集：alpha 蒙版点阵，由渲染进程解码后推来。
+   *
+   * 抽成一个私有方法而不是在调用处写 if：调用点只有一处，
+   * 但"以后再加后端"时改这里比改调用处更容易被找到。
+   */
+  #resolveRoute(bounds: Rect, point: Point): CursorRoute {
+    if (this.#definition.kind === 'sprite') {
+      return resolveSpriteCursorRoute(this.#spriteMask, this.#spriteAnimation, bounds, point)
+    }
+    return resolveCursorRoute(PET_GEOMETRY, bounds, point, this.#scale)
+  }
+
+  /**
+   * 接收渲染进程推来的蒙版。
+   *
+   * ⚠️ 调用方**必须**先 `validateMask` 校验。这里只做结构收窄，
+   *    不做校验——两处都校验会让"谁负责"变得模糊，而这条路径上
+   *    模糊的代价是每 80ms 一次的位运算拿到脏数据。
+   */
+  setSpriteMask(mask: SpriteMask): void {
+    if (this.#disposed) return
+    this.#spriteMask = mask
+    // 蒙版到了之后立刻重算一次路由：在那之前一律穿透，
+    // 不主动重算的话要等下一次轮询（最多 80ms）宠物才可点——
+    // 那 80ms 恰好是用户"刚看到宠物就点上去"的时候。
+    this.#tickCursor()
+  }
+
+  /** 渲染进程报告当前动作。 */
+  setSpriteAnimation(animation: string): void {
+    if (this.#disposed) return
+    if (!SPRITE_ANIMATIONS.has(animation)) return
+    if (animation === this.#spriteAnimation) return
+    this.#spriteAnimation = animation as CodexAnimationName
+    // 动作变了要立刻重算：不同动作的剪影不同（挥手时手臂在外面），
+    // 用旧蒙版会有一小段"点在空气上"或"身上点不到"。
+    this.#tickCursor()
   }
 
   /** 当前形态。用户手动值优先于系统自动值。 */
@@ -200,7 +297,7 @@ export class PetWindowController {
     const before = this.bounds()
     this.#scale = scale
 
-    const size = petWindowSize(scale)
+    const size = petWindowSizeFor(this.#definition, scale)
     // 以**右下角为锚点**缩放：宠物默认贴在右下角，
     // 若以左上角为锚点，放大会把它推出工作区、缩小会留下空档。
     this.#window.setBounds({
@@ -352,7 +449,7 @@ export class PetWindowController {
     // 隐身态没有任何可见内容 → 一律穿透，避免"看不见但挡住下层"的幽灵窗口。
     const bounds = this.bounds()
     const next: CursorRoute = shouldAcceptCursor(this.mode)
-      ? resolveCursorRoute(PET_GEOMETRY, bounds, point, this.#scale)
+      ? this.#resolveRoute(bounds, point)
       : 'passthrough'
 
     const routeChanged = shouldFlipIgnoreMouseEvents(this.#cursorRoute, next)
@@ -590,7 +687,7 @@ export class PetWindowController {
   placeAtDefaultPosition(): void {
     const display = screen.getDisplayMatching(this.#window.getBounds())
     const area = display.workArea
-    const size = petWindowSize(this.#scale)
+    const size = petWindowSizeFor(this.#definition, this.#scale)
 
     this.#window.setBounds({
       x: Math.round(area.x + area.width - size.width - PET_MARGIN),
@@ -617,7 +714,7 @@ export class PetWindowController {
     if (this.#disposed) return false
     if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) return false
 
-    const size = petWindowSize(this.#scale)
+    const size = petWindowSizeFor(this.#definition, this.#scale)
     const candidate = {
       x: Math.round(position.x),
       y: Math.round(position.y),

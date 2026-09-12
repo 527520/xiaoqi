@@ -110,7 +110,11 @@ export function parseWebpSize(bytes: Uint8Array | Uint8ClampedArray): ImageSize 
     // 有损格式：'VP8 ' + u32 块长度 + 3 字节帧标签 + 3 字节起始码(0x9d 0x01 0x2a)
     //           + u16 宽（低 14 位有效） + u16 高
     if (data.length < chunk + 8 + 10) return null
-    if (data[chunk + 8 + 3] !== 0x9d || data[chunk + 8 + 4] !== 0x01 || data[chunk + 8 + 5] !== 0x2a) {
+    if (
+      data[chunk + 8 + 3] !== 0x9d ||
+      data[chunk + 8 + 4] !== 0x01 ||
+      data[chunk + 8 + 5] !== 0x2a
+    ) {
       return null
     }
     const width = (data[chunk + 8 + 6] ?? 0) | ((data[chunk + 8 + 7] ?? 0) << 8)
@@ -138,8 +142,10 @@ export function parsePngSize(bytes: Uint8Array | Uint8ClampedArray): ImageSize |
     if (data[i] !== signature[i]) return null
   }
   if (!hasTag(data, 12, 'IHDR')) return null
-  const width = ((data[16] ?? 0) << 24) | ((data[17] ?? 0) << 16) | ((data[18] ?? 0) << 8) | (data[19] ?? 0)
-  const height = ((data[20] ?? 0) << 24) | ((data[21] ?? 0) << 16) | ((data[22] ?? 0) << 8) | (data[23] ?? 0)
+  const width =
+    ((data[16] ?? 0) << 24) | ((data[17] ?? 0) << 16) | ((data[18] ?? 0) << 8) | (data[19] ?? 0)
+  const height =
+    ((data[20] ?? 0) << 24) | ((data[21] ?? 0) << 16) | ((data[22] ?? 0) << 8) | (data[23] ?? 0)
   if (width <= 0 || height <= 0) return null
   return { width, height, format: 'PNG' }
 }

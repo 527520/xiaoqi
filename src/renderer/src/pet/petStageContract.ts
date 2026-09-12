@@ -40,12 +40,23 @@ export interface PetStageLike {
   /** 关系基调。程序化后端调制动作幅度；图集后端只调制反应灵敏度。 */
   setMood(mood: RelationshipMood): void
 
-  onDrag(handlers: {
-    start: (offset: { x: number; y: number }) => void
-    end: () => void
-  }): void
+  onDrag(handlers: { start: (offset: { x: number; y: number }) => void; end: () => void }): void
 
   onAnimationStateChange(callback: (isAnimating: boolean) => void): void
+
+  /**
+   * 主动释放舞台自己占的资源（帧纹理、场景图节点、事件监听）。
+   *
+   * ── 为什么需要它，而不是靠 `app.destroy(true)` ──
+   *
+   * `app.destroy(true)` 只清理**已经在 `app.stage` 上**的东西。
+   * 而图集那条路上有一个几十毫秒的窗口（解码 1536×2288 的图）：
+   * 这段时间里组件可能已经被卸载，舞台**刚造好但还没挂上去**——
+   * 它已经注册了 pointer 监听、建了几十个帧纹理，却不在任何销毁链上。
+   * 没有这个方法，那就是一处永久残留（在 StrictMode 的
+   * "挂载 → 卸载 → 再挂载"下每次开发期都会发生）。
+   */
+  destroy(): void
 
   /** 诊断：触发一次交互动画（等于被拍一下）。 */
   debugTriggerInteraction(): void

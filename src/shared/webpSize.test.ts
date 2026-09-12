@@ -237,7 +237,9 @@ describe('parsePngSize', () => {
  */
 describe('与契约的交叉检查', () => {
   it('★ 解析出来的尺寸能直接与图集契约比对（这就是它存在的用途）', () => {
-    const size = parseWebpSize(riff('VP8L', vp8lBody(CODEX_V2_ATLAS.atlasWidth, CODEX_V2_ATLAS.atlasHeight)))
+    const size = parseWebpSize(
+      riff('VP8L', vp8lBody(CODEX_V2_ATLAS.atlasWidth, CODEX_V2_ATLAS.atlasHeight)),
+    )
     expect(size?.width).toBe(CODEX_V2_ATLAS.atlasWidth)
     expect(size?.height).toBe(CODEX_V2_ATLAS.atlasHeight)
     // V1 与 V2 的差别只在行数（高度），宽度相同——所以只比宽度是查不出问题的

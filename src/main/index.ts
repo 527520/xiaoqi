@@ -14,7 +14,15 @@ import {
 import { describeUserNotificationState } from '@shared/geometry'
 import { PET_SCALE_DEFAULT, PET_SCALE_STEPS } from '@shared/constants'
 import { IPC } from '@shared/ipc'
-import type { DisturbLevel, Emotion, PetRuntimeState, VisibilityMode } from '@shared/types'
+import { validateMask, type SpriteMask } from '@shared/spriteMask'
+import { PROCEDURAL_PET, type PetDefinition } from '@shared/petDefinition'
+import type {
+  DisturbLevel,
+  Emotion,
+  PetRenderInfo,
+  PetRuntimeState,
+  VisibilityMode,
+} from '@shared/types'
 
 import { decidePanelLog, stateFingerprint } from './core/debugPanel'
 import { resolveDisturbLevel } from './core/disturbGate'
@@ -22,10 +30,16 @@ import { targetFrameRate } from './core/frameRate'
 import { Perception, type PerceivedState } from './core/perception'
 import { evidenceDir, runEvidenceCapture, runResizeTest } from './evidence'
 import { MemoryService } from './memory/service'
+import { loadPetDefinition, type PetLoadResult } from './petLoader'
 import { selfCheckPlatform } from './platform'
 import { win32Platform } from './platform/win32'
 import { createPetWindow, resolveRendererEntry, trayIconPath } from './window/createPetWindow'
 import { createLedgerWindow, resolveLedgerEntry } from './window/ledgerWindow'
+import {
+  declarePetAssetScheme,
+  petAssetUrl,
+  registerPetAssetProtocol,
+} from './window/petAssetProtocol'
 import { createProbeWindow, resolveProbeEntry } from './window/probeWindow'
 import { PetWindowController } from './window/petWindow'
 import { loadWindowState, savePosition, saveScale } from './window/windowState'
@@ -60,6 +74,16 @@ import { loadWindowState, savePosition, saveScale } from './window/windowState'
  * 自动校验（见 eslint.config.mjs），因此未来有人重构这个文件时会被拦住。
  */
 app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
+
+/**
+ * 声明宠物素材的自定义协议是"特权"的。
+ *
+ * ⚠️ 与上面那行 `appendSwitch` 同类：**必须在 `app.whenReady()` 之前**。
+ *    晚了的话 `fetch`/`<img>` 会拒绝加载 `xiaoqi-pet://`，
+ *    而报错信息是"URL scheme must be http/https"这类看起来无关的话——
+ *    症状只是"图集永远加载不出来"，很容易被误判成素材本身有问题。
+ */
+declarePetAssetScheme()
 
 // 宠物是常驻小工具，不应该因为"所有窗口都关了"就退出——
 // 它没有主窗口，托盘才是它的常驻入口。
@@ -114,6 +138,19 @@ const DEBUG_STATE_ENABLED =
 let memory: MemoryService | null = null
 
 /**
+ * 当前宠物定义（程序化小奇 或 图集宠物）。
+ *
+ * 由 `XIAOQI_PET_DIR` 决定，在 `bootstrap()` 里加载一次。
+ * 加载失败会**回落到内置形象**并把原因记进日志——素材是用户放进去的东西，
+ * 有问题时不能让它把桌宠拖到起不来。
+ */
+let petDefinition: PetDefinition = PROCEDURAL_PET
+
+/** 精灵图蒙版的两条一次性日志开关（避免每帧刷屏）。 */
+let spriteMaskAccepted = false
+let spriteMaskRejected = false
+
+/**
  * 记忆数据库路径。与 `window-state.json` 同目录（`%APPDATA%\xiaoqi`）。
  *
  * 用 `userData` 而不是自拼 `%APPDATA%`：路径随平台与打包形态变化，
@@ -154,6 +191,32 @@ function runtimeState(): PetRuntimeState {
     disturbLevel: currentDisturbLevel(),
     // 关系基调（只影响表现，不影响是否回应）。
     mood: perception?.snapshot?.mood ?? 'reserved',
+    // 当前形象：哪条渲染后端、图集在哪。
+    pet: petRenderInfo(),
+  }
+}
+
+/**
+ * 渲染进程需要的形象信息。
+ *
+ * 只推"渲染进程无法自己知道"的部分（跑哪条后端、图集在哪）；
+ * 栅格契约（逐帧时长表）在 `@shared/petAtlas` 里是常量，两边 import 同一份，
+ * 不靠 IPC 传——传过去只会造出"两份可能不一致"的机会。
+ */
+function petRenderInfo(): PetRenderInfo {
+  if (petDefinition.kind === 'procedural') {
+    return {
+      backend: 'procedural',
+      sheetUrl: null,
+      spriteVersion: 1,
+      displayName: petDefinition.displayName,
+    }
+  }
+  return {
+    backend: 'sprite',
+    sheetUrl: petAssetUrl(petDefinition.sheetFile),
+    spriteVersion: petDefinition.atlasVersion,
+    displayName: petDefinition.displayName,
   }
 }
 
@@ -450,6 +513,37 @@ function registerIpc(): void {
     controller?.setAnimating(isAnimating === true)
   })
 
+  // ── 精灵图命中蒙版（图集后端）──
+  //
+  // 渲染进程解码图集后把下采样出来的点阵推过来；主进程用它做逐像素命中。
+  // 收端**必须整体校验**：这条通道每 80ms 被读一次，脏数据会让位运算
+  // 静默算出错误结果（表现为"永远穿透"，不报错，极难定位）。
+  ipcMain.on(IPC.spriteMaskPush, (_event, raw: unknown) => {
+    const result = validateMask(raw)
+    if (!result.usable) {
+      // 拒收 → 回落穿透（安全侧）。只在第一次说，免得每帧刷屏。
+      if (!spriteMaskRejected) {
+        spriteMaskRejected = true
+        log(`⚠️ 精灵图蒙版被拒收（${result.reason ?? '未知原因'}）→ 命中判定回落到穿透`)
+      }
+      return
+    }
+    controller?.setSpriteMask(raw as SpriteMask)
+    if (!spriteMaskAccepted) {
+      spriteMaskAccepted = true
+      const mask = raw as SpriteMask
+      log(
+        `精灵图蒙版已接收（${String(Object.keys(mask.masks).length)} 个动作；` +
+          `点阵区域 ${String(mask.grid.width)}×${String(mask.grid.height)} 格内像素）`,
+      )
+    }
+  })
+
+  ipcMain.on(IPC.spriteAnimationChanged, (_event, animation: unknown) => {
+    if (typeof animation !== 'string') return
+    controller?.setSpriteAnimation(animation)
+  })
+
   // 渲染进程的未捕获错误（含堆栈）。见 shared/ipc.ts 里 rendererError 的注释。
   // 用 sendSync 的接收端：`event.returnValue` 必须赋值，否则渲染进程会挂住。
   ipcMain.on(IPC.rendererError, (event, message: unknown, stack: unknown) => {
@@ -697,16 +791,38 @@ function bootstrap(): void {
   //    而报错会出现在渲染进程里一个看起来无关的地方。
   const preloadPath = PRELOAD_PATH
 
+  // ── 宠物素材 ──
+  //
+  // `XIAOQI_PET_DIR` 指向一个素材目录（pet.json + spritesheet.webp）；
+  // 没设、或者素材有问题时回落到内置的程序化小奇，并把原因喊进日志。
+  //
+  // ★ 署名必须打出来。本项目的素材有相当一部分是**非商用授权**
+  //   （CC BY-NC 4.0，见 docs/RECON.md），"用了谁的图、什么授权"这件事
+  //   要在运行时可见，而不是埋在某个 README 里等着被忘记。
+  const petLoad: PetLoadResult = loadPetDefinition(process.env, log)
+  petDefinition = petLoad.definition
+  log(`宠物形象：${petLoad.attribution}`)
+  for (const error of petLoad.errors) {
+    log(`⚠️ 素材加载失败，已回落到内置形象：${error}`)
+  }
+
+  // 自定义协议**只能在 app.ready 之后注册**（`declarePetAssetScheme()`
+  // 已经在文件顶层、ready 之前调过了）。
+  if (petLoad.directory) {
+    registerPetAssetProtocol(petLoad.directory)
+  }
+
   // 恢复上次的缩放与位置。
   // 顺序很重要：**先缩放再定位**——窗口尺寸变了以后，保存的左上角坐标
   // 对应的可见区域也会变；先定尺寸再放位置，结果才与用户上次看到的一致。
   const saved = loadWindowState()
   const startScale = saved.scale ?? PET_SCALE_DEFAULT
 
-  petWindow = createPetWindow({ preloadPath, scale: startScale })
+  petWindow = createPetWindow({ preloadPath, scale: startScale, definition: petDefinition })
   controller = new PetWindowController({
     window: petWindow,
     platform: win32Platform,
+    definition: petDefinition,
     onStateChanged: broadcastState,
     logger: log,
   })

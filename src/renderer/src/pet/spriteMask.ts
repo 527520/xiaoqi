@@ -192,10 +192,7 @@ export function dwellBounds(
  * 钳进格子时会**向另一侧扩**（而不是缩），免得内容刚好贴着边时
  * 把最外一圈切掉。
  */
-export function selectMaskGrid(
-  atlas: PetSpriteAtlas,
-  bounds: PixelRect | null,
-): MaskGrid {
+export function selectMaskGrid(atlas: PetSpriteAtlas, bounds: PixelRect | null): MaskGrid {
   if (!bounds) return FULL_CELL_GRID
 
   const snap = (value: number): number => Math.round(value / GRID_SNAP) * GRID_SNAP

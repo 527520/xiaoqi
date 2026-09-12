@@ -48,10 +48,12 @@ describe('selectSpriteAnimation：优先级', () => {
   })
 
   it('★ 静默 → idle：情绪再高兴也不挥手（静默的语义就是"几乎不动"）', () => {
-    expect(selectSpriteAnimation(input({ mode: 'silent', emotion: 'happy' })).animation).toBe('idle')
-    expect(
-      selectSpriteAnimation(input({ mode: 'silent', emotion: 'surprised' })).animation,
-    ).toBe('idle')
+    expect(selectSpriteAnimation(input({ mode: 'silent', emotion: 'happy' })).animation).toBe(
+      'idle',
+    )
+    expect(selectSpriteAnimation(input({ mode: 'silent', emotion: 'surprised' })).animation).toBe(
+      'idle',
+    )
   })
 
   it('★ 交互回应压过情绪与工作模式（ADR-0003：无条件回应，不能"因为忙就不理人"）', () => {
@@ -63,9 +65,9 @@ describe('selectSpriteAnimation：优先级', () => {
   })
 
   it('★ 交互回应也压过"等用户"与"检视"', () => {
-    expect(
-      selectSpriteAnimation(input({ reactionRemaining: 0.5, waiting: true })).animation,
-    ).toBe('waving')
+    expect(selectSpriteAnimation(input({ reactionRemaining: 0.5, waiting: true })).animation).toBe(
+      'waving',
+    )
     expect(
       selectSpriteAnimation(input({ reactionRemaining: 0.5, reviewing: true })).animation,
     ).toBe('waving')
@@ -255,9 +257,7 @@ describe('★ lookFromCursor：0° = 正上，且屏幕 y 轴向下', () => {
   })
 
   it('★ 只有 idle 才带注视方向（挥手/奔跑时"看向光标"在视觉上是错的）', () => {
-    const idle = selectSpriteAnimation(
-      input({ workMode: 'rest', cursorOffset: { x: 0, y: -40 } }),
-    )
+    const idle = selectSpriteAnimation(input({ workMode: 'rest', cursorOffset: { x: 0, y: -40 } }))
     expect(idle.animation).toBe('idle')
     expect(idle.look).toBe(0)
 

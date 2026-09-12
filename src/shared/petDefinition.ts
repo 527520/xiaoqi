@@ -135,6 +135,45 @@ function readString(input: Record<string, unknown>, key: string): string | undef
 }
 
 /**
+ * 读授权信息，兼容**两种写法**。
+ *
+ * 社区包的 `pet.json` 里 `license` 有两种形态，两种都真实存在：
+ *
+ * ```jsonc
+ * { "license": "MIT" }                                    // ① 裸字符串
+ * { "license": { "name": "CC0-1.0", "url": "...", "author": "..." } }  // ② 对象
+ * ```
+ *
+ * Codex 官方的生成器产出的是 ②。只认 ① 会让**所有官方格式的包**都被
+ * 判成"授权未注明"——而那条警告的作用正是"让授权在运行时可见"，
+ * 误报会让它变成噪声、进而被忽略。
+ *
+ * 对象里还可以带 `author`（授权块的作者优先于顶层 `author`——
+ * 它更具体）。
+ */
+function readLicense(input: Record<string, unknown>): {
+  license?: string
+  url?: string
+  author?: string
+} {
+  const value = input.license
+  if (typeof value === 'string' && value.trim() !== '') {
+    return { license: value.trim() }
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  const block = value as Record<string, unknown>
+  const result: { license?: string; url?: string; author?: string } = {}
+  // 对象形态里，名字可能叫 name / id / spdx
+  const name = readString(block, 'name') ?? readString(block, 'id') ?? readString(block, 'spdx')
+  if (name) result.license = name
+  const url = readString(block, 'url')
+  if (url) result.url = url
+  const author = readString(block, 'author')
+  if (author) result.author = author
+  return result
+}
+
+/**
  * 解析 `pet.json`。
  *
  * ── 宽容的边界在哪里 ──
@@ -202,10 +241,13 @@ export function parsePetManifest(
   }
 
   // ── 授权信息 ──
+  const licenseBlock = readLicense(input)
   const source: PetSource = {}
-  const author = readString(input, 'author')
-  const license = readString(input, 'license')
-  const url = readString(input, 'url') ?? readString(input, 'source')
+  // 授权块里的 author 优先于顶层 author——它更具体（顶层那个可能只是
+  // 打包者，而授权块里写的是作品的作者）。
+  const author = licenseBlock.author ?? readString(input, 'author')
+  const license = licenseBlock.license
+  const url = licenseBlock.url ?? readString(input, 'url') ?? readString(input, 'source')
   if (author) Object.assign(source, { author })
   if (license) Object.assign(source, { license })
   if (url) Object.assign(source, { url })

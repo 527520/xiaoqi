@@ -335,10 +335,7 @@ describe('extractSpriteMask：整套蒙版', () => {
     const idle = mask.masks.idle
 
     // 圆心（格内 96,110）必须命中
-    expect(
-      hitTestSpriteMask(idle, 96, 110, CW, CH, mask.grid),
-      '圆心应命中',
-    ).toBe(true)
+    expect(hitTestSpriteMask(idle, 96, 110, CW, CH, mask.grid), '圆心应命中').toBe(true)
 
     // 四角是空的（圆半径 70，格子 192×208，四角离圆心 > 100）
     for (const [x, y] of [
@@ -347,9 +344,10 @@ describe('extractSpriteMask：整套蒙版', () => {
       [2, CH - 2],
       [CW - 2, CH - 2],
     ] as const) {
-      expect(hitTestSpriteMask(idle, x, y, CW, CH, mask.grid), `角 (${String(x)},${String(y)}) 应穿透`).toBe(
-        false,
-      )
+      expect(
+        hitTestSpriteMask(idle, x, y, CW, CH, mask.grid),
+        `角 (${String(x)},${String(y)}) 应穿透`,
+      ).toBe(false)
     }
   })
 

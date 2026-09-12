@@ -131,7 +131,9 @@ describe('★ hitTestSpriteMask：没有蒙版必须判穿透（安全侧）', (
     expect(hitTestSpriteMask(mask, -1, 100, CELL_WIDTH, CELL_HEIGHT, CELL_GRID)).toBe(false)
     expect(hitTestSpriteMask(mask, 100, -1, CELL_WIDTH, CELL_HEIGHT, CELL_GRID)).toBe(false)
     expect(hitTestSpriteMask(mask, CELL_WIDTH, 100, CELL_WIDTH, CELL_HEIGHT, CELL_GRID)).toBe(false)
-    expect(hitTestSpriteMask(mask, 100, CELL_HEIGHT, CELL_WIDTH, CELL_HEIGHT, CELL_GRID)).toBe(false)
+    expect(hitTestSpriteMask(mask, 100, CELL_HEIGHT, CELL_WIDTH, CELL_HEIGHT, CELL_GRID)).toBe(
+      false,
+    )
   })
 
   it('尺寸非法时返回 false，不抛错（穿透轮询每 80ms 跑一次，抛错会停摆）', () => {
@@ -140,9 +142,9 @@ describe('★ hitTestSpriteMask：没有蒙版必须判穿透（安全侧）', (
     expect(hitTestSpriteMask(mask, 10, 10, CELL_WIDTH, 0, CELL_GRID)).toBe(false)
     expect(hitTestSpriteMask(mask, 10, 10, -1, CELL_HEIGHT, CELL_GRID)).toBe(false)
     expect(hitTestSpriteMask(mask, Number.NaN, 10, CELL_WIDTH, CELL_HEIGHT, CELL_GRID)).toBe(false)
-    expect(hitTestSpriteMask(mask, 10, Number.POSITIVE_INFINITY, CELL_WIDTH, CELL_HEIGHT, CELL_GRID)).toBe(
-      false,
-    )
+    expect(
+      hitTestSpriteMask(mask, 10, Number.POSITIVE_INFINITY, CELL_WIDTH, CELL_HEIGHT, CELL_GRID),
+    ).toBe(false)
     // 网格退化
     expect(
       hitTestSpriteMask(mask, 10, 10, CELL_WIDTH, CELL_HEIGHT, { x: 0, y: 0, width: 0, height: 0 }),
@@ -154,7 +156,9 @@ describe('★ hitTestSpriteMask：坐标 → 点阵的换算', () => {
   it('点中心命中', () => {
     const mask = maskWithDot(3, 4)
     const center = cellDot(3, 4)
-    expect(hitTestSpriteMask(mask, center.x, center.y, CELL_WIDTH, CELL_HEIGHT, CELL_GRID)).toBe(true)
+    expect(hitTestSpriteMask(mask, center.x, center.y, CELL_WIDTH, CELL_HEIGHT, CELL_GRID)).toBe(
+      true,
+    )
   })
 
   it('★ 相邻点为 false（证明是查表而不是恒真）', () => {
@@ -186,12 +190,19 @@ describe('★ hitTestSpriteMask：坐标 → 点阵的换算', () => {
     // 只有最后一列亮；窗口最右一个像素必须命中
     const mask = maskWithDot(MASK_COLS - 1, MASK_ROWS - 1)
     expect(
-      hitTestSpriteMask(mask, CELL_WIDTH - 0.5, CELL_HEIGHT - 0.5, CELL_WIDTH, CELL_HEIGHT, CELL_GRID),
+      hitTestSpriteMask(
+        mask,
+        CELL_WIDTH - 0.5,
+        CELL_HEIGHT - 0.5,
+        CELL_WIDTH,
+        CELL_HEIGHT,
+        CELL_GRID,
+      ),
     ).toBe(true)
     // 而第 0 列是假的，说明它确实是查表查出来的
-    expect(hitTestSpriteMask(mask, 0.5, CELL_HEIGHT - 0.5, CELL_WIDTH, CELL_HEIGHT, CELL_GRID)).toBe(
-      false,
-    )
+    expect(
+      hitTestSpriteMask(mask, 0.5, CELL_HEIGHT - 0.5, CELL_WIDTH, CELL_HEIGHT, CELL_GRID),
+    ).toBe(false)
   })
 
   it('★ 缩放后仍按比例换算（窗口尺寸变了，判定形状不变）', () => {
@@ -201,7 +212,14 @@ describe('★ hitTestSpriteMask：坐标 → 点阵的换算', () => {
       const center = cellDot(6, 8)
       // 点中心在两种坐标系里是同一点（局部 DIP = 格子像素 × scale）
       expect(
-        hitTestSpriteMask(mask, center.x * scale, center.y * scale, window.width, window.height, CELL_GRID),
+        hitTestSpriteMask(
+          mask,
+          center.x * scale,
+          center.y * scale,
+          window.width,
+          window.height,
+          CELL_GRID,
+        ),
         `scale ${String(scale)}`,
       ).toBe(true)
       // 邻居仍为假
@@ -245,7 +263,9 @@ describe('★ hitTestSpriteMask：点阵区域带偏移（贴着宠物而不是�
     expect(hitTestSpriteMask(mask, edge.x, edge.y, CELL_WIDTH, CELL_HEIGHT, offsetGrid)).toBe(true)
     // 区域右边界之外（还在格子里）→ 穿透
     const outside = offsetGrid.x + offsetGrid.width + 1
-    expect(hitTestSpriteMask(mask, outside, edge.y, CELL_WIDTH, CELL_HEIGHT, offsetGrid)).toBe(false)
+    expect(hitTestSpriteMask(mask, outside, edge.y, CELL_WIDTH, CELL_HEIGHT, offsetGrid)).toBe(
+      false,
+    )
   })
 
   it('★ 偏移网格在缩放后依然对齐（缩放不改变区域在格内的位置）', () => {
@@ -336,12 +356,16 @@ describe('validateMask：宽容但不含糊', () => {
   it('★ 缺 grid / grid 非法要能说出来（否则换算基准是 undefined）', () => {
     expect(validateMask({ kind: 'sprite', masks: {} }).usable).toBe(false)
     expect(validateMask({ kind: 'sprite', grid: null, masks: {} }).usable).toBe(false)
-    expect(validateMask({ kind: 'sprite', grid: { x: 0, y: 0, width: 0, height: 10 }, masks: {} }).usable).toBe(
-      false,
-    )
     expect(
-      validateMask({ kind: 'sprite', grid: { x: 0, y: 0, width: Number.NaN, height: 10 }, masks: {} })
+      validateMask({ kind: 'sprite', grid: { x: 0, y: 0, width: 0, height: 10 }, masks: {} })
         .usable,
+    ).toBe(false)
+    expect(
+      validateMask({
+        kind: 'sprite',
+        grid: { x: 0, y: 0, width: Number.NaN, height: 10 },
+        masks: {},
+      }).usable,
     ).toBe(false)
   })
 

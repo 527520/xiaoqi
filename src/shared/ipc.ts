@@ -41,6 +41,31 @@ export const IPC = {
   /** 渲染进程报告交互动画结束（send，单向）。 */
   petAnimating: 'pet:animating',
   /**
+   * 渲染进程把图集的 **alpha 命中蒙版**推给主进程（send，单向）。
+   *
+   * ── 为什么命中判定必须在主进程做 ──
+   *
+   * 穿透开关是**整窗**的（`setIgnoreMouseEvents`），而决定何时翻转的是
+   * 每 80ms 一次的光标轮询——那在渲染进程里做不到：光标移出宠物轮廓后
+   * 鼠标事件会穿透出去，渲染进程根本收不到那些 move。
+   *
+   * ── 为什么要送蒙版而不是几何 ──
+   *
+   * 图集宠物的剪影是不规则 alpha，几何表达不了。蒙版是下采样后的点阵
+   * （13×16，每动作约 64 字节），一次推送约 600 字节，之后每次轮询只查一位。
+   *
+   * ⚠️ 结构不合法时主进程**整体拒收**并回落几何判定/穿透——
+   *    半张蒙版会让命中区在某些动作下神秘缺失。
+   */
+  spriteMaskPush: 'sprite:mask',
+  /**
+   * 渲染进程报告当前正在播的动作（send，单向）。
+   *
+   * 蒙版是**按动作**存的，所以主进程必须知道现在该查哪一张。
+   * 不报的话它只能永远查 idle 的蒙版——表现是"宠物跑起来之后就点不到了"。
+   */
+  spriteAnimationChanged: 'sprite:animation',
+  /**
    * 渲染进程把未捕获异常 / 未处理的 Promise 拒绝送到主进程日志。
    *
    * 为什么需要这条通道：本机的诊断条件很差——
@@ -104,6 +129,16 @@ export interface XiaoqiBridge {
   notifyInteraction(): void
   /** 报告交互动画开始/结束，用于帧率降档。 */
   notifyAnimating(isAnimating: boolean): void
+  /**
+   * 把图集的 alpha 命中蒙版推给主进程。
+   *
+   * 只在**精灵图后端**、且图集解码完成之后调用一次。
+   * 参数类型是 `unknown`：这条通道的收端会做完整校验，
+   * 而类型断言在这里只是把"我保证它是对的"写进代码——那不该是唯一防线。
+   */
+  pushSpriteMask(mask: unknown): void
+  /** 报告当前正在播的动作名（主进程据此选蒙版）。 */
+  reportSpriteAnimation(animation: string): void
   /** 报告渲染进程的未捕获错误（含堆栈），由主进程写进日志。 */
   reportError(message: string, stack: string): void
   /** 订阅状态变化；返回取消订阅函数。 */

@@ -5,7 +5,12 @@ import { animationDuration, frameAt, LOOK_DIRECTIONS } from '@shared/petAtlas'
 import { hitTestSpriteMask } from '@shared/spriteMask'
 import type { Emotion, RelationshipMood, VisibilityMode } from '@shared/types'
 
-import { isLoopingAnimation, selectSpriteAnimation, lookFromCursor, type SpriteAnimationSelection } from './spriteAnimation'
+import {
+  isLoopingAnimation,
+  selectSpriteAnimation,
+  lookFromCursor,
+  type SpriteAnimationSelection,
+} from './spriteAnimation'
 import { frameRectsFor, lookRectFor, type PreparedSpriteSheet } from './spriteSheet'
 import type { PetStageLike } from './petStageContract'
 
@@ -70,6 +75,7 @@ export class SpriteStage implements PetStageLike {
   #reviewing = false
 
   #appliedMaxFps = -1
+  #destroyed = false
   #animationCallback: ((isAnimating: boolean) => void) | null = null
   #dragStart: ((offset: { x: number; y: number }) => void) | null = null
   #dragEnd: (() => void) | null = null
@@ -206,6 +212,35 @@ export class SpriteStage implements PetStageLike {
 
   onAnimationStateChange(callback: (isAnimating: boolean) => void): void {
     this.#animationCallback = callback
+  }
+
+  /**
+   * 释放舞台占的资源。
+   *
+   * 幂等：React 的清理链在 StrictMode 下会跑两次，第二次不该抛。
+   *
+   * ⚠️ 只 `removeChild` 不 `destroy` 是不够的：那些帧纹理是**新建**的
+   *    `Texture`（不是从缓存里拿的共享实例），不显式销毁就会一直占着
+   *    GPU 上的整张图集。整张图集 1536×2288×4 ≈ 14MB，每次缩放重建
+   *    都会再占一份——而缩放是可以被用户反复点的。
+   */
+  destroy(): void {
+    if (this.#destroyed) return
+    this.#destroyed = true
+    this.#animationCallback = null
+    this.#dragStart = null
+    this.#dragEnd = null
+
+    this.#root.removeChild(this.#sprite)
+    this.#sprite.destroy()
+    for (const textures of this.#frames.values()) {
+      for (const texture of textures) texture.destroy()
+    }
+    this.#frames.clear()
+    for (const texture of this.#lookFrames.values()) texture.destroy()
+    this.#lookFrames.clear()
+
+    this.#root.destroy({ children: false })
   }
 
   setScale(scale: number): void {

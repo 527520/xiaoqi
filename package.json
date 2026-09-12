@@ -31,6 +31,9 @@
     "verify:memory-wiring": "node scripts/verify-memory-wiring.mjs",
     "verify:ledger": "node scripts/verify-ledger.mjs",
     "verify:m2": "node scripts/verify-m2.mjs",
+    "verify:sprite": "node scripts/verify-sprite.mjs",
+    "verify:sprite-live": "node scripts/verify-sprite-live.mjs",
+    "pets:gen": "node scripts/generate-test-atlas.mjs",
     "probe:mesh": "node scripts/probe-mesh-shader.mjs",
     "icons": "node scripts/generate-icons.mjs",
     "dist": "electron-vite build && electron-builder --win --config electron-builder.yml"

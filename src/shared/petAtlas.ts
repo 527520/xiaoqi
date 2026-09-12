@@ -170,10 +170,7 @@ export function frameRect(
 }
 
 /** 某个注视方向在图集里的位置。 */
-export function lookFrameRect(
-  atlas: PetSpriteAtlas,
-  direction: LookDirection,
-): FrameRect | null {
+export function lookFrameRect(atlas: PetSpriteAtlas, direction: LookDirection): FrameRect | null {
   // V1 没有注视行
   if (atlas.version < 2) return null
   const index = LOOK_DIRECTIONS.indexOf(direction)
@@ -206,10 +203,7 @@ export function nearestLookDirection(degrees: number): LookDirection {
 }
 
 /** 一个动作循环一轮的总时长（毫秒）。 */
-export function animationDuration(
-  atlas: PetSpriteAtlas,
-  animation: CodexAnimationName,
-): number {
+export function animationDuration(atlas: PetSpriteAtlas, animation: CodexAnimationName): number {
   const spec = atlas.animations[animation]
   return spec.frameDurations.reduce((sum, ms) => sum + ms, 0)
 }
@@ -289,7 +283,9 @@ export function validateAtlas(input: {
       if (have === undefined) continue
       const need = atlas.animations[name].frames
       if (have < need) {
-        warnings.push(`动作 ${name} 只有 ${String(have)} 帧，规范要求 ${String(need)} 帧（按实际帧数播放）`)
+        warnings.push(
+          `动作 ${name} 只有 ${String(have)} 帧，规范要求 ${String(need)} 帧（按实际帧数播放）`,
+        )
       }
     }
   }

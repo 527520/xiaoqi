@@ -108,6 +108,7 @@ export class PetStage implements PetStageLike {
   #nextBlinkAt = 2.4
   /** 当前生效的 maxFPS，避免每帧重复写（Pixi 的 setter 会重置计时基线）。 */
   #appliedMaxFps = -1
+  #destroyed = false
   /** 缩放。由外部按主进程推送的值设置。 */
   #scale = 1
   /** 光标（设计空间局部坐标）；null = 够远，眼睛回正。 */
@@ -280,6 +281,24 @@ export class PetStage implements PetStageLike {
 
   onAnimationStateChange(callback: (isAnimating: boolean) => void): void {
     this.#animationCallback = callback
+  }
+
+  /**
+   * 释放舞台。
+   *
+   * 幂等：React 的清理链在 StrictMode 下会跑两次，第二次不该抛。
+   *
+   * 程序化后端的资源就是一棵 Graphics 场景图（没有外部纹理），
+   * 但同样要显式销毁——因为"造好但还没挂到 `app.stage` 上"的那个
+   * 窗口期同样存在（见 `petStageContract.ts` 里 `destroy()` 的说明）。
+   */
+  destroy(): void {
+    if (this.#destroyed) return
+    this.#destroyed = true
+    this.#animationCallback = null
+    this.#dragStart = null
+    this.#dragEnd = null
+    this.#root.destroy({ children: true })
   }
 
   /** 设置缩放（整数倍或小数都可以）。 */
