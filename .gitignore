@@ -72,9 +72,11 @@ docs/evidence/runtime/*
 # 施工令明确要求的**证据**，只生成一次、要被人看见：
 #   ledger/  —— §5 M3 要求的记忆账本截图
 #   m2/      —— §5 M2 要求的调试面板截图与面板实际输出
+#   sprite/  —— 精灵图后端的形象截图（`scripts/capture-pet.mjs` 的产物）
 # 想让新的证据目录入库，就在这里加一行（**带尾斜杠**）。
 !docs/evidence/runtime/ledger/
 !docs/evidence/runtime/m2/
+!docs/evidence/runtime/sprite/
 docs/evidence/probe/
 
 # 上面第 13 行的 `*.log` 会把证据日志也一起忽略掉，这里显式放行。
