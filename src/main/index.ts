@@ -26,6 +26,7 @@ import { selfCheckPlatform } from './platform'
 import { win32Platform } from './platform/win32'
 import { createPetWindow, resolveRendererEntry, trayIconPath } from './window/createPetWindow'
 import { createLedgerWindow, resolveLedgerEntry } from './window/ledgerWindow'
+import { createProbeWindow, resolveProbeEntry } from './window/probeWindow'
 import { PetWindowController } from './window/petWindow'
 import { loadWindowState, savePosition, saveScale } from './window/windowState'
 
@@ -489,6 +490,32 @@ function registerIpc(): void {
 }
 
 /**
+ * 渲染探针窗口（仅当 `XIAOQI_MESH_PROBE=1`）。
+ *
+ * ── 为什么它是一个**真的窗口**而不是渲染进程里的一段脚本 ──
+ *
+ * 要验证的是"Mesh + 自定义 GLSL 在**透明置顶窗**下能否工作"。
+ * 透明、置顶、无边框这些是**窗口属性**，只有真的开一个那样的窗口才验得到。
+ * 在普通窗口里跑通不能外推——本项目在"透明窗 + 渲染特性"上踩过的坑
+ * （DevTools 让窗口不透明、遮挡追踪让窗口空白）全都是**窗口属性**引起的。
+ *
+ * 与 `XIAOQI_RESIZE_TEST` / `XIAOQI_OPEN_LEDGER_MS` 同类：只给取证用。
+ */
+function openMeshProbeIfRequested(): void {
+  if (process.env.XIAOQI_MESH_PROBE !== '1') return
+
+  log('（取证）打开渲染探针窗口')
+  const window = createProbeWindow()
+
+  const entry = resolveProbeEntry()
+  if (entry.url) {
+    void window.loadURL(entry.url)
+  } else if (entry.file) {
+    void window.loadFile(entry.file)
+  }
+}
+
+/**
  * 打开记忆账本（§5 M3：可见、可删、可一键清空、可手动记住/忘掉）。
  *
  * ── 为什么是单例窗口 ──
@@ -801,6 +828,7 @@ function bootstrap(): void {
   createTray()
   registerShortcuts()
   registerPowerEvents()
+  openMeshProbeIfRequested()
   scheduleLedgerIfRequested()
 }
 

@@ -75,9 +75,14 @@ export default defineConfig({
         //
         // ⚠️ 产出路径与 `window/ledgerWindow.ts` 的 `resolveLedgerEntry()`
         //    必须一致（`out/renderer/ledger.html`）。改这里就要改那里。
+        //
+        // `mesh` 是**渲染探针页**（`scripts/probe-mesh-shader.mjs` 用）。
+        // 它验证"Mesh + 自定义 GLSL 在透明窗下能否工作"，是立体化渲染的
+        // 前置关卡。留在构建里是有意的：渲染管线改动后应当能随时重跑它。
         input: {
           index: resolve('src/renderer/index.html'),
           ledger: resolve('src/renderer/ledger.html'),
+          mesh: resolve('src/renderer/mesh.html'),
         },
       },
     },

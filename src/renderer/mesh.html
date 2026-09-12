@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>网格着色器探针</title>
+    <style>
+      /* 无边框小窗里任何默认边距都会造成溢出并画出滚动条，
+         而滚动条是不透明的 UI —— 它会污染"四角必须透明"这条判据。 */
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+      }
+    </style>
+    <!--
+      CSP 与宠物页面一致（含 pixi.js/unsafe-eval 所需的策略）。
+
+      ⚠️ 探针页面**必须**与宠物窗口用同一套 CSP 与窗口参数，
+      否则它验证不了真机上会发生什么——本项目的教训是
+      "诊断工具本身会骗我"（见 docs/RETRO.md）。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' ws://localhost:* ws://127.0.0.1:*"
+    />
+  </head>
+  <body>
+    <!--
+      ⚠️ `margin:0; overflow:hidden` 是**必须**的，不是装饰。
+
+      浏览器默认给 body 8px 外边距，在一个 220×220 的无边框窗口里会立刻
+      造成溢出 → Chromium 画出滚动条。滚动条是**不透明**的 UI，
+      于是"四角应该完全透明"这条判据会失败，看起来像"透明窗退化了"，
+      实际只是**探针页自己的默认样式**把窗口塞满了。
+      （第一轮探针就是这么假失败的：截图上能直接看到两个灰色滚动条。）
+    -->
+    <div id="probe-root" style="margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden"></div>
+    <script type="module" src="/src/probe/meshProbe.ts"></script>
+  </body>
+</html>
