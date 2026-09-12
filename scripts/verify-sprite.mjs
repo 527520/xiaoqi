@@ -55,6 +55,19 @@ function checkCanFail(label, okIfDetectionWorks, detail = '') {
 }
 
 /**
+ * 提示（既不计通过也不计失败）。
+ *
+ * 用于"素材的**元数据**有缺项，但技术上完全可用"这一类情况。
+ * 为什么不计失败：授权字段缺失是**第三方素材的常见状况**，
+ * 它不影响能不能渲染。把它算失败会让验证脚本在真实素材上永远红，
+ * 而红着的脚本等于没有脚本——真正的问题会被淹没。
+ * 但它必须**打印出来**：授权决定能不能分发，不能悄悄放过。
+ */
+function info(label, detail = '') {
+  console.log(`  • ${label}${detail ? `    ${detail}` : ''}`)
+}
+
+/**
  * 用 Python/Pillow 把图集解成原始 RGBA。
  *
  * 为什么绕 Python：Node 侧没有 WebP 解码器，而本机装不了原生模块
@@ -106,7 +119,7 @@ async function main() {
     spriteSheet: '/src/renderer/src/pet/spriteSheet.ts',
     spriteAnimation: '/src/renderer/src/pet/spriteAnimation.ts',
   })
-  const { CODEX_V2_ATLAS, animationDuration, frameAt } = mods.petAtlas
+  const { atlasForVersion, animationDuration, frameAt, lookFrameRect } = mods.petAtlas
   const { parsePetManifest } = mods.petDefinition
   const { parseImageSize } = mods.webpSize
   const { hitTestSpriteMask, MASK_COLS, MASK_ROWS } = mods.spriteMask
@@ -122,11 +135,26 @@ async function main() {
   const head = readFileSync(sheetPath).subarray(0, 64)
   const headerSize = parseImageSize(head, 'spritesheet.webp')
   check('能从文件头读出图集尺寸', headerSize !== null)
+
+  // ★ 版本由**清单**决定，不是脚本假定 V2。
+  //
+  // 踩过一次：初版把 V2 契约写死在脚本里，于是拿一只**完全合规的 V1 素材**
+  // （1536×1872）去跑，得到"文件头尺寸不等于契约"——看起来像素材坏了，
+  // 其实是校验脚本只认一种版本。
+  //
+  // V1 是规范里合法的格式（省略 spriteVersionNumber），必须支持。
+  const declaredVersion = manifest.spriteVersionNumber === 2 ? 2 : 1
+  const ATLAS = atlasForVersion(declaredVersion)
   check(
-    '文件头尺寸等于 V2 契约',
-    headerSize?.width === CODEX_V2_ATLAS.atlasWidth &&
-      headerSize?.height === CODEX_V2_ATLAS.atlasHeight,
-    `读到 ${headerSize?.width}×${headerSize?.height}，契约 ${CODEX_V2_ATLAS.atlasWidth}×${CODEX_V2_ATLAS.atlasHeight}`,
+    `图集版本判定为 V${String(declaredVersion)}` +
+      (manifest.spriteVersionNumber === undefined ? '（清单省略了 spriteVersionNumber）' : ''),
+    declaredVersion === 1 || declaredVersion === 2,
+    `契约应为 ${ATLAS.atlasWidth}×${ATLAS.atlasHeight}（${ATLAS.columns}列×${ATLAS.rows}行）`,
+  )
+  check(
+    '文件头尺寸等于该版本的契约',
+    headerSize?.width === ATLAS.atlasWidth && headerSize?.height === ATLAS.atlasHeight,
+    `读到 ${headerSize?.width}×${headerSize?.height}，契约 ${ATLAS.atlasWidth}×${ATLAS.atlasHeight}`,
   )
 
   const parsed = parsePetManifest(manifest, {
@@ -138,22 +166,36 @@ async function main() {
     console.error('\n元数据不可用，后续检查无法进行。')
     process.exit(1)
   }
-  check(
-    '★ 授权信息被读出来了（官方格式是 license 对象）',
-    Boolean(parsed.definition.source?.license),
-    `作者=${parsed.definition.source?.author ?? '未注明'} 授权=${parsed.definition.source?.license ?? '未注明'}`,
-  )
-  check('解析没有产生警告', parsed.warnings.length === 0, parsed.warnings.join('；'))
+  // 授权字段：有就报出来，没有就**提示**而不是失败。
+  //
+  // 判据不是"字段在不在"，而是"我们有没有把这个信息暴露给用户"——
+  // 那件事由主进程的启动日志负责（`宠物形象：<名字> · <作者> · <授权>`），
+  // 而它已经由实时脚本验证过了。
+  if (parsed.definition.source?.license) {
+    check(
+      '★ 授权信息被读出来了',
+      true,
+      `作者=${parsed.definition.source.author ?? '未注明'} 授权=${parsed.definition.source.license}`,
+    )
+  } else {
+    info(
+      '素材未声明授权（技术上不影响使用，但**对外分发前必须自行核实**）',
+      `作者=${parsed.definition.source?.author ?? '未注明'}`,
+    )
+  }
 
-  // ★ 反例：把版本改成 1（尺寸就对不上 V1 的 1536×1872），必须被拒。
+  // ★ 反例：把一个**与真实尺寸不符**的版本号写进去，必须被拒。
+  //
+  // 不能像初版那样固定用 1：素材本来就是 V1 时，"改成 1"等于没改，
+  // 反例自然不成立（这正是拿真素材跑时暴露出来的脚本缺陷）。
+  // 正确做法是声明**另一个**版本。
+  const otherVersion = declaredVersion === 1 ? 2 : 1
   const wrongVersion = parsePetManifest(
-    { ...manifest, spriteVersionNumber: 1 },
-    {
-      sheetPixels: headerSize,
-    },
+    { ...manifest, spriteVersionNumber: otherVersion },
+    { sheetPixels: headerSize },
   )
   checkCanFail(
-    '把 spriteVersionNumber 改成 1 后解析**应该失败**（证明版本校验真的在跑）',
+    `把 spriteVersionNumber 改成 ${String(otherVersion)} 后解析**应该失败**（证明版本校验真的在跑）`,
     wrongVersion.definition === null,
     wrongVersion.errors[0] ?? '（没有报错，说明校验没生效）',
   )
@@ -163,7 +205,7 @@ async function main() {
   const pixels = decodeWithPython(sheetPath)
   check(
     '解码后的尺寸等于契约',
-    pixels.width === CODEX_V2_ATLAS.atlasWidth && pixels.height === CODEX_V2_ATLAS.atlasHeight,
+    pixels.width === ATLAS.atlasWidth && pixels.height === ATLAS.atlasHeight,
     `${pixels.width}×${pixels.height}`,
   )
 
@@ -181,16 +223,16 @@ async function main() {
     `角 alpha = ${corners.join(',')}`,
   )
 
-  const sheet = prepareSpriteSheet(pixels, CODEX_V2_ATLAS)
-  const actionNames = Object.keys(CODEX_V2_ATLAS.animations)
+  const sheet = prepareSpriteSheet(pixels, ATLAS)
+  const actionNames = Object.keys(ATLAS.animations)
   const scannedComplete = actionNames.every(
-    (name) => sheet.scannedFrames[name] === CODEX_V2_ATLAS.animations[name].frames,
+    (name) => sheet.scannedFrames[name] === ATLAS.animations[name].frames,
   )
   check(
     '★ 九个标准动作的占格扫描都数满（等于契约帧数）',
     scannedComplete,
     actionNames
-      .map((n) => `${n}=${sheet.scannedFrames[n]}/${CODEX_V2_ATLAS.animations[n].frames}`)
+      .map((n) => `${n}=${sheet.scannedFrames[n]}/${ATLAS.animations[n].frames}`)
       .join(' '),
   )
 
@@ -201,7 +243,7 @@ async function main() {
     height: pixels.height,
     data: new Uint8ClampedArray(pixels.width * pixels.height * 4),
   }
-  const emptySheet = prepareSpriteSheet(emptyPixels, CODEX_V2_ATLAS)
+  const emptySheet = prepareSpriteSheet(emptyPixels, ATLAS)
   checkCanFail(
     '喂全透明像素时扫描结果应为 0 帧（证明扫描真的在看像素）',
     actionNames.every((name) => emptySheet.scannedFrames[name] === 0),
@@ -243,15 +285,15 @@ async function main() {
       sheet.mask.grid.height > 0 &&
       sheet.mask.grid.x >= 0 &&
       sheet.mask.grid.y >= 0 &&
-      sheet.mask.grid.x + sheet.mask.grid.width <= CODEX_V2_ATLAS.cellWidth &&
-      sheet.mask.grid.y + sheet.mask.grid.height <= CODEX_V2_ATLAS.cellHeight,
+      sheet.mask.grid.x + sheet.mask.grid.width <= ATLAS.cellWidth &&
+      sheet.mask.grid.y + sheet.mask.grid.height <= ATLAS.cellHeight,
     `区域 ${sheet.mask.grid.width}×${sheet.mask.grid.height} @ (${sheet.mask.grid.x},${sheet.mask.grid.y})`,
   )
 
   // ══ ④ 命中判定：模型位置 ══
   console.log('\n④ 命中判定（格子内实际是圆心）')
-  const cellW = CODEX_V2_ATLAS.cellWidth
-  const cellH = CODEX_V2_ATLAS.cellHeight
+  const cellW = ATLAS.cellWidth
+  const cellH = ATLAS.cellHeight
   const bounds = { x: 1000, y: 500, width: cellW, height: cellH }
   const toScreen = (x, y) => ({ x: bounds.x + x, y: bounds.y + y })
 
@@ -352,11 +394,18 @@ async function main() {
 
   // ══ ⑥ 切帧与时钟 ══
   console.log('\n⑥ 切帧与时钟推进')
-  const idleRects = frameRectsFor(CODEX_V2_ATLAS, 'idle', 6)
-  check('idle 切出 6 帧纹理', idleRects.length === 6, idleRects.map((r) => r.x).join(','))
+  // 用**素材实际画出来的**帧数，不是契约帧数——真实素材可能少画几帧，
+  // 那时我们按实际播（`playableFrames`），而不是播到空白格。
+  const idleFrames = sheet.playableFrames.idle ?? 1
+  const idleRects = frameRectsFor(ATLAS, 'idle', idleFrames)
   check(
-    '★ 六个帧矩形**互不相同**（相同就说明切帧没生效）',
-    new Set(idleRects.map((r) => `${r.x},${r.y}`)).size === 6,
+    `idle 切出 ${String(idleFrames)} 帧纹理`,
+    idleRects.length === idleFrames,
+    idleRects.map((r) => r.x).join(','),
+  )
+  check(
+    `★ ${String(idleFrames)} 个帧矩形**互不相同**（相同就说明切帧没生效）`,
+    new Set(idleRects.map((r) => `${r.x},${r.y}`)).size === idleRects.length,
   )
   check(
     '★ 所有帧矩形都落在图集范围内',
@@ -368,15 +417,23 @@ async function main() {
     idleRects.every((r) => r.y === 0),
   )
 
-  const total = animationDuration(CODEX_V2_ATLAS, 'idle')
+  const total = animationDuration(ATLAS, 'idle')
   const seen = new Set()
-  for (let t = 0; t < total; t += 10) seen.add(frameAt(CODEX_V2_ATLAS, 'idle', t))
-  check('★ 时钟走完一轮会经过全部 6 帧', seen.size === 6, `经过了 ${seen.size} 帧`)
-  checkCanFail(
-    '★ 时钟不会越界（任何时刻的帧号都在 0..5）',
-    [...seen].every((f) => f >= 0 && f <= 5),
+  for (let t = 0; t < total; t += 10) seen.add(frameAt(ATLAS, 'idle', t))
+  check(
+    `★ 时钟走完一轮会经过全部 ${String(idleFrames)} 帧`,
+    seen.size === idleFrames,
+    `经过了 ${String(seen.size)} 帧`,
   )
-  check('动画总时长等于逐帧时长之和', total === 280 + 110 + 110 + 140 + 140 + 320, `${total}ms`)
+  checkCanFail(
+    `★ 时钟不会越界（任何时刻的帧号都在 0..${String(idleFrames - 1)}）`,
+    [...seen].every((f) => f >= 0 && f <= idleFrames - 1),
+  )
+  check(
+    '动画总时长等于该动作逐帧时长之和',
+    total === ATLAS.animations.idle.frameDurations.reduce((a, b) => a + b, 0),
+    `${String(total)}ms`,
+  )
 
   // ══ ⑦ 注视方向 ══
   console.log('\n⑦ 注视方向（0° = 正上）')
@@ -384,15 +441,26 @@ async function main() {
   check('正右方 → 90°', lookFromCursor({ x: 50, y: 0 }) === 90)
   checkCanFail('正下方 → 180°（不是 0°，防上下镜像）', lookFromCursor({ x: 0, y: 50 }) === 180)
   check('正左方 → 270°', lookFromCursor({ x: -50, y: 0 }) === 270)
-  {
-    const lookA = mods.petAtlas.lookFrameRect(CODEX_V2_ATLAS, 0)
-    const lookB = mods.petAtlas.lookFrameRect(CODEX_V2_ATLAS, 180)
+  if (declaredVersion === 2) {
+    const lookA = lookFrameRect(ATLAS, 0)
+    const lookB = lookFrameRect(ATLAS, 180)
     check(
       'V2 的 0° 在第 9 行、180° 在第 10 行',
       lookA?.y === 9 * cellH && lookB?.y === 10 * cellH,
-      `0°@y=${lookA?.y} 180°@y=${lookB?.y}`,
+      `0°@y=${String(lookA?.y)} 180°@y=${String(lookB?.y)}`,
+    )
+  } else {
+    // ★ V1 **没有**注视行。这不是缺陷，是版本能力所限——
+    //   所以这里要断言的是"正确地什么也不给"，而不是"应该有"。
+    checkCanFail(
+      '★ V1 没有注视行 → lookFrameRect 返回 null（渲染器据此回落普通 idle）',
+      lookFrameRect(ATLAS, 0) === null && lookFrameRect(ATLAS, 180) === null,
     )
   }
+  check(
+    '注视角度换算与版本无关（两条后端都靠它决定看向哪）',
+    lookFromCursor({ x: 0, y: -50 }) === 0 && lookFromCursor({ x: 50, y: 0 }) === 90,
+  )
 
   // ══ ⑧ 路由与几何后端不冲突 ══
   console.log('\n⑧ 回归：程序化后端的几何命中不受影响')

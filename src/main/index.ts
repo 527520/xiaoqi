@@ -805,6 +805,17 @@ function bootstrap(): void {
   for (const error of petLoad.errors) {
     log(`⚠️ 素材加载失败，已回落到内置形象：${error}`)
   }
+  if (petLoad.definition.kind === 'sprite') {
+    // 把两条后端的差别**在日志里说清楚**。
+    //
+    // 为什么值得单独打一行：精灵图后端的可点区域由渲染进程解码后推来，
+    // 在那之前一律穿透。排查"宠物点不到"时，第一件事就是确认
+    // 现在到底跑的是哪条后端、命中判定用的是哪一种。
+    log(
+      `命中判定：alpha 点阵蒙版（由渲染进程解码图集后推来；` +
+        `到达之前一律穿透）。情绪表达上限低于程序化后端，见 docs/verify-sprite.md`,
+    )
+  }
 
   // 自定义协议**只能在 app.ready 之后注册**（`declarePetAssetScheme()`
   // 已经在文件顶层、ready 之前调过了）。

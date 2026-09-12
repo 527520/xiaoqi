@@ -78,12 +78,23 @@ async function main() {
     spriteMask: '/src/shared/spriteMask.ts',
     spriteSheet: '/src/renderer/src/pet/spriteSheet.ts',
   })
-  const { CODEX_V2_ATLAS } = mods.petAtlas
+  const { atlasForVersion } = mods.petAtlas
   const { MASK_COLS, MASK_ROWS } = mods.spriteMask
   const { prepareSpriteSheet } = mods.spriteSheet
 
+  // ★ 版本由清单决定，不假定 V2。
+  //   踩过一次：拿一只**完全合规的 V1 素材**（1536×1872）跑，脚本按 V2 的
+  //   1536×2288 去校验，于是报"图集尺寸与契约不符"——看起来像素材坏了，
+  //   其实是校验脚本只认一种版本。V1 是规范里的合法格式。
+  const manifest = JSON.parse(readFileSync(join(petDir, 'pet.json'), 'utf8'))
+  const declaredVersion = manifest.spriteVersionNumber === 2 ? 2 : 1
+  const ATLAS = atlasForVersion(declaredVersion)
+  console.log(
+    `图集版本：V${String(declaredVersion)}（契约 ${ATLAS.atlasWidth}×${ATLAS.atlasHeight}）`,
+  )
+
   const pixels = decodeWithPythonSync(join(petDir, 'spritesheet.webp'))
-  const sheet = prepareSpriteSheet(pixels, CODEX_V2_ATLAS)
+  const sheet = prepareSpriteSheet(pixels, ATLAS)
   const idle = sheet.mask.masks.idle
   if (!idle) {
     console.error('图集里没有 idle 蒙版，无法验证')
@@ -193,20 +204,20 @@ async function main() {
     const win = {
       x: Number(restored?.[1] ?? placement?.[1]),
       y: Number(restored?.[2] ?? placement?.[2]),
-      w: Number(placement?.[3] ?? CODEX_V2_ATLAS.cellWidth),
-      h: Number(placement?.[4] ?? CODEX_V2_ATLAS.cellHeight),
+      w: Number(placement?.[3] ?? ATLAS.cellWidth),
+      h: Number(placement?.[4] ?? ATLAS.cellHeight),
     }
     console.log(`\n宠物窗口：(${win.x}, ${win.y}) ${win.w}×${win.h}`)
 
     check(
       win.w !== win.h && win.h > win.w,
-      `★ 窗口尺寸是格子的比例（${CODEX_V2_ATLAS.cellWidth}×${CODEX_V2_ATLAS.cellHeight} × 缩放），**不是**正方形`,
+      `★ 窗口尺寸是格子的比例（${ATLAS.cellWidth}×${ATLAS.cellHeight} × 缩放），**不是**正方形`,
       `实际 ${win.w}×${win.h}`,
     )
     check(
-      win.w === CODEX_V2_ATLAS.cellWidth,
-      '窗口宽度等于 V2 格宽（缩放 1）',
-      `实际 ${win.w}，期望 ${CODEX_V2_ATLAS.cellWidth}`,
+      win.w === ATLAS.cellWidth,
+      `窗口宽度等于格宽（V${String(declaredVersion)} 的 ${String(ATLAS.cellWidth)}）`,
+      `实际 ${String(win.w)}，期望 ${String(ATLAS.cellWidth)}`,
     )
 
     // ── 逐个探针 ──
