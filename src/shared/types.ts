@@ -29,7 +29,13 @@ export interface Point {
 export interface PetGeometry {
   /** 窗口逻辑尺寸（DIP）。 */
   readonly window: { readonly width: number; readonly height: number }
-  /** 身体椭圆中心与半径。 */
+  /**
+   * 头部椭圆中心与半径。
+   *
+   * 字段名保留 `body` 是历史原因（第一版宠物只有一个"身体"，
+   * 其实那就是头）。改名会牵动命中测试、图标生成与多处测试，
+   * 收益只是措辞更准，所以留名不改，由注释说明它现在是**头**。
+   */
   readonly body: {
     readonly cx: number
     readonly cy: number
@@ -40,8 +46,56 @@ export interface PetGeometry {
   readonly earLeft: { readonly cx: number; readonly cy: number; readonly r: number }
   /** 右耳圆形。 */
   readonly earRight: { readonly cx: number; readonly cy: number; readonly r: number }
+  /**
+   * 躯干椭圆 —— 让宠物**不只是个脑袋**的关键一块。
+   *
+   * ⚠️ 它与 `body`（头）**相交**，这是连通性要求：`setShape` 的并集
+   * 无法表达"两个分离的块"，所以任何新增部件都必须与已有部件重叠。
+   */
+  readonly torso: {
+    readonly cx: number
+    readonly cy: number
+    readonly rx: number
+    readonly ry: number
+  }
+  /** 左前腿。与躯干相交（腿根埋在躯干里）。 */
+  readonly frontLegLeft: {
+    readonly cx: number
+    readonly cy: number
+    readonly rx: number
+    readonly ry: number
+  }
+  /** 右前腿。 */
+  readonly frontLegRight: {
+    readonly cx: number
+    readonly cy: number
+    readonly rx: number
+    readonly ry: number
+  }
+  /** 左后腿。坐姿时收在躯干侧面，比前腿更靠外。 */
+  readonly hindLegLeft: {
+    readonly cx: number
+    readonly cy: number
+    readonly rx: number
+    readonly ry: number
+  }
+  /** 右后腿。 */
+  readonly hindLegRight: {
+    readonly cx: number
+    readonly cy: number
+    readonly rx: number
+    readonly ry: number
+  }
   /** 尾巴末端圆形（宠物是**单一连通轮廓**，尾巴必须挂得住命中区）。 */
   readonly tailTip: { readonly cx: number; readonly cy: number; readonly r: number }
+}
+
+/** 椭圆形的几何参数（中心 + 双半径）。 */
+export interface EllipseShape {
+  readonly cx: number
+  readonly cy: number
+  readonly rx: number
+  readonly ry: number
 }
 
 /**

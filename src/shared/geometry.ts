@@ -42,40 +42,86 @@ export function pointInCircle(
  */
 export function scalePetGeometry(geometry: PetGeometry, scale: number): PetGeometry {
   const s = (value: number): number => value * scale
+  const ellipse = (shape: { cx: number; cy: number; rx: number; ry: number }) => ({
+    cx: s(shape.cx),
+    cy: s(shape.cy),
+    rx: s(shape.rx),
+    ry: s(shape.ry),
+  })
+  const circle = (shape: { cx: number; cy: number; r: number }) => ({
+    cx: s(shape.cx),
+    cy: s(shape.cy),
+    r: s(shape.r),
+  })
+
   return {
     window: { width: s(geometry.window.width), height: s(geometry.window.height) },
-    body: {
-      cx: s(geometry.body.cx),
-      cy: s(geometry.body.cy),
-      rx: s(geometry.body.rx),
-      ry: s(geometry.body.ry),
-    },
-    earLeft: { cx: s(geometry.earLeft.cx), cy: s(geometry.earLeft.cy), r: s(geometry.earLeft.r) },
-    earRight: {
-      cx: s(geometry.earRight.cx),
-      cy: s(geometry.earRight.cy),
-      r: s(geometry.earRight.r),
-    },
-    tailTip: { cx: s(geometry.tailTip.cx), cy: s(geometry.tailTip.cy), r: s(geometry.tailTip.r) },
+    body: ellipse(geometry.body),
+    earLeft: circle(geometry.earLeft),
+    earRight: circle(geometry.earRight),
+    torso: ellipse(geometry.torso),
+    frontLegLeft: ellipse(geometry.frontLegLeft),
+    frontLegRight: ellipse(geometry.frontLegRight),
+    hindLegLeft: ellipse(geometry.hindLegLeft),
+    hindLegRight: ellipse(geometry.hindLegRight),
+    tailTip: circle(geometry.tailTip),
   }
+}
+
+/**
+ * 宠物轮廓的**全部组成块**（缩放后）。
+ *
+ * ★ 抽成一个函数是刻意的：命中测试、图标生成、以及任何"宠物占了哪些像素"
+ *   的判断都从**这一份**取块，于是新增一个部件（比如这轮加的躯干与四肢）
+ *   只需要在这里加一行，不可能出现"画出来了但点不到"。
+ *
+ * 施工令 §4.3③：`setShape` 的矩形是并集、无法挖洞，所以宠物必须是
+ * **单一连通轮廓**——这里的并集形式与之一致，且各块在设计上互相交叠。
+ */
+/**
+ * 宠物轮廓里的一个组成块。
+ *
+ * 用**判别联合**而不是统一的椭圆：耳朵与尾巴尖天生是正圆，
+ * 写成椭圆要重复两次半径，反而容易出现 rx/ry 不一致的错。
+ */
+export type SilhouettePart =
+  | {
+      readonly kind: 'ellipse'
+      readonly shape: { cx: number; cy: number; rx: number; ry: number }
+    }
+  | { readonly kind: 'circle'; readonly shape: { cx: number; cy: number; r: number } }
+
+export function petSilhouetteShapes(geometry: PetGeometry): SilhouettePart[] {
+  return [
+    { kind: 'circle', shape: geometry.earLeft },
+    { kind: 'circle', shape: geometry.earRight },
+    { kind: 'ellipse', shape: geometry.body },
+    { kind: 'ellipse', shape: geometry.torso },
+    { kind: 'ellipse', shape: geometry.hindLegLeft },
+    { kind: 'ellipse', shape: geometry.hindLegRight },
+    { kind: 'ellipse', shape: geometry.frontLegLeft },
+    { kind: 'ellipse', shape: geometry.frontLegRight },
+    { kind: 'circle', shape: geometry.tailTip },
+  ]
 }
 
 /**
  * 点是否落在宠物的**可见轮廓**内。
  *
- * 轮廓 = 身体椭圆 ∪ 双耳 ∪ 尾巴（施工令 §4.3③：`setShape` 的矩形是并集、
- * 无法挖洞，所以宠物必须是**单一连通轮廓**；这里的并集形式与之一致）。
+ * 轮廓 = 双耳 ∪ 头 ∪ 躯干 ∪ 四条腿 ∪ 尾巴尖。
  *
  * `point` 用**窗口局部坐标**（DIP），且 `geometry` 必须已经是**缩放后**的
  * （见 `scalePetGeometry`）。调用方负责把屏幕坐标翻译过来。
  */
 export function hitTestPet(geometry: PetGeometry, point: Point): boolean {
-  return (
-    pointInEllipse(point, geometry.body) ||
-    pointInCircle(point, geometry.earLeft) ||
-    pointInCircle(point, geometry.earRight) ||
-    pointInCircle(point, geometry.tailTip)
-  )
+  for (const entry of petSilhouetteShapes(geometry)) {
+    if (entry.kind === 'circle') {
+      if (pointInCircle(point, entry.shape)) return true
+    } else if (pointInEllipse(point, entry.shape)) {
+      return true
+    }
+  }
+  return false
 }
 
 /**

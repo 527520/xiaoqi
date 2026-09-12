@@ -82,6 +82,19 @@ export class PetStage {
   readonly #body = new Graphics()
   readonly #blush = new Graphics()
   readonly #mouth = new Graphics()
+  /**
+   * 躯干与四条腿 —— **让宠物不只是个脑袋**。
+   *
+   * 用户的原话是「当前只有一个头，四肢躯干也要有」。一个只有头的角色
+   * 读起来是**图标**而不是生物，所以解剖的完整度本身就是
+   * "看起来是个活物"的前提，优先级高于着色。
+   *
+   * ⚠️ 与头/双耳不同，这一层**没有**走 GPU 光照（着色器的部件表里只有
+   *    头与双耳）。它靠烘进图形的柔和渐变 + 全局 AO/接触阴影压出接缝，
+   *    读起来仍有体积，代价是不随视差移动。这是**有意的取舍**：
+   *    把着色器的部件表从 3 个扩到 8 个，收益边际而风险明显。
+   */
+  readonly #limbs = new Graphics()
   /** 眼睛：**直接挂在 root 上**，不套中间 Container（理由见 `#drawEyes()`）。 */
   readonly #eyes = new Graphics()
   readonly #onInteract: () => void
@@ -140,6 +153,7 @@ export class PetStage {
     this.#onInteract = onInteract
 
     this.#drawShadow()
+    this.#drawTorsoAndLegs()
     this.#drawTail()
     this.#drawEars()
     this.#drawBody()
@@ -151,6 +165,7 @@ export class PetStage {
     //   影子 → 尾巴 → 耳朵 → 身体 → 腮红/嘴 → 眼睛
     // 身体盖住耳朵与尾巴的根部，"接得上"而不是"贴上去"。
     this.#root.addChild(this.#shadow)
+    this.#root.addChild(this.#limbs)
     this.#root.addChild(this.#tail)
     this.#root.addChild(this.#ears)
     this.#root.addChild(this.#body)
@@ -406,6 +421,9 @@ export class PetStage {
     }
 
     applyBodyLike(this.#body)
+    // 躯干与四肢跟身体一起呼吸：它们**不参与次级动作**
+    //（耳朵/尾巴的滞后摆动），因为四肢与躯干是一整块承重结构。
+    applyBodyLike(this.#limbs)
     applyBodyLike(this.#ears, 0.02, sway + earSecondarySway(t) * moodAnim.fidgetScale)
     applyBodyLike(this.#tail, 0, sway * 0.6 + tailSway(t) * moodAnim.fidgetScale)
     applyBodyLike(this.#blush)
@@ -431,6 +449,63 @@ export class PetStage {
       alpha: 0.07,
     })
     this.#shadow.ellipse(s.cx, s.cy, s.rx, s.ry).fill({ color: PET_PALETTE.shadow, alpha: 0.13 })
+  }
+
+  /**
+   * 躯干与四条腿 —— **让宠物不只是个脑袋**。
+   *
+   * 用户的原话是「当前只有一个头，四肢躯干也要有」。只有头的角色
+   * 读起来是**图标**而不是生物，所以先把解剖补齐，再谈着色。
+   *
+   * ── 姿态：坐着的四足小动物 ──
+   *
+   * - 后腿画在躯干**之下**，只露出外侧 → 坐姿时收腿的感觉；
+   * - 前腿画在躯干**之上**，撑在身前 → 承重感；
+   * - 每一条都与躯干**相交**（腿根埋进躯干），这是连通性的硬要求
+   *   （施工令 §4.3③：`setShape` 的并集无法表达分离的块）。
+   *
+   * ── 为什么这一层不走光照着色器 ──
+   *
+   * 着色器的部件表目前只有头与双耳（`uBody` / `uEarL` / `uEarR`）。
+   * 四肢与躯干若也要逐像素法线，得把部件表从 3 个扩到 8 个；
+   * 而它们面积小、又大多被躯干遮住，收益边际、风险明显。
+   * 所以这里用**烘进图形的竖直渐变**（上亮下暗，与全局光源同向），
+   * 立体感主要来自渐变方向一致，而不是逐像素法线。
+   */
+  #drawTorsoAndLegs(): void {
+    const g = this.#limbs
+
+    /** 竖直渐变：上亮下暗，与全局光源（右上）方向一致。 */
+    const vertical = (top: number, bottom: number): FillGradient =>
+      new FillGradient({
+        type: 'linear',
+        start: { x: 0, y: 0 },
+        end: { x: 0, y: 1 },
+        colorStops: [
+          { offset: 0, color: top },
+          { offset: 1, color: bottom },
+        ],
+      })
+
+    // 后腿：先画，于是被躯干压住大半，只露出外侧。
+    for (const leg of [PET_GEOMETRY.hindLegLeft, PET_GEOMETRY.hindLegRight]) {
+      g.ellipse(leg.cx, leg.cy, leg.rx, leg.ry)
+        .fill(vertical(PET_PALETTE.bodyBottom, PET_PALETTE.ink))
+        .stroke({ color: PET_PALETTE.ink, width: PET_STROKE_WIDTH })
+    }
+
+    // 躯干
+    const torso = PET_GEOMETRY.torso
+    g.ellipse(torso.cx, torso.cy, torso.rx, torso.ry)
+      .fill(vertical(PET_PALETTE.bodyTop, PET_PALETTE.bodyBottom))
+      .stroke({ color: PET_PALETTE.ink, width: PET_STROKE_WIDTH })
+
+    // 前腿：后画，压在躯干之上 —— 它们是"撑在身前"的。
+    for (const leg of [PET_GEOMETRY.frontLegLeft, PET_GEOMETRY.frontLegRight]) {
+      g.ellipse(leg.cx, leg.cy, leg.rx, leg.ry)
+        .fill(vertical(PET_PALETTE.bodyTop, PET_PALETTE.bodyBottom))
+        .stroke({ color: PET_PALETTE.ink, width: PET_STROKE_WIDTH })
+    }
   }
 
   /**

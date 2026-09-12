@@ -59,8 +59,8 @@ export const PET_PALETTE = {
  * 比改任何外形轮廓都更容易被读作可爱。
  */
 export const PET_FACE = {
-  eyeLeft: { cx: 91, cy: 136, rx: 11, ry: 12.5 },
-  eyeRight: { cx: 129, cy: 136, rx: 11, ry: 12.5 },
+  eyeLeft: { cx: 94, cy: 82, rx: 10.5, ry: 12 },
+  eyeRight: { cx: 126, cy: 82, rx: 10.5, ry: 12 },
   /** 瞳孔半径。比眼形小，留出一圈琥珀色的虹膜。 */
   pupilR: 6.2,
   /** 主高光：偏右上——全局唯一的光源方向。 */
@@ -71,8 +71,8 @@ export const PET_FACE = {
   catchlight2Offset: { x: -3.8, y: 4.0 },
 
   /** 腮红椭圆。 */
-  blushLeft: { cx: 71, cy: 154, rx: 9.5, ry: 6 },
-  blushRight: { cx: 149, cy: 154, rx: 9.5, ry: 6 },
+  blushLeft: { cx: 76, cy: 98, rx: 9, ry: 5.8 },
+  blushRight: { cx: 144, cy: 98, rx: 9, ry: 5.8 },
 
   /**
    * 嘴：一条极短的下弧线。
@@ -80,10 +80,10 @@ export const PET_FACE = {
    * 刻意**不画鼻子**。小圆鼻子会让它读成"熊"；一条微微上扬的嘴
    * 配上大眼已经足够表达，多一处五官只会更"卡通吉祥物"。
    */
-  mouth: { cx: 110, cy: 163, halfWidth: 7, drop: 4.5, strokeWidth: 2.2 },
+  mouth: { cx: 110, cy: 106, halfWidth: 7, drop: 4.5, strokeWidth: 2.2 },
 
   /** 影子（贴地）。 */
-  shadow: { cx: 110, cy: 207, rx: 46, ry: 7.5 },
+  shadow: { cx: 110, cy: 209, rx: 62, ry: 8 },
 } as const
 
 /**
