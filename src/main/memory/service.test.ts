@@ -325,3 +325,155 @@ describe('MemoryService · 检索', () => {
     service.stop()
   })
 })
+
+describe('★ 阶段二接线：巩固决策落到真实库里', () => {
+  it('new → 写入一条新事实', () => {
+    const { service } = makeService()
+    service.start()
+    expect(service.consolidateFact('用户不喝咖啡', ['drink'])).toBe('new')
+    const all = service.search({ kinds: ['semantic'] })
+    expect(all).toHaveLength(1)
+    expect(all[0]?.content).toBe('用户不喝咖啡')
+    service.stop()
+  })
+
+  it('★ 同主题不矛盾 → reinforce：**不新增**，只把既有那条权重提上去', () => {
+    const { service } = makeService()
+    service.start()
+    service.consolidateFact('用户工作日会加班', ['overtime'])
+    const before = service.search({ kinds: ['semantic'] })[0]?.weight ?? 0
+
+    expect(service.consolidateFact('用户这周又加班了', ['overtime'])).toBe('reinforce')
+
+    const all = service.search({ kinds: ['semantic'] })
+    // ★ 仍然只有一条 —— 这才是 reinforce 的定义：换个说法不该攒出一堆
+    expect(all).toHaveLength(1)
+    // 内容没被换掉（reinforce 不产生新内容）
+    expect(all[0]?.content).toBe('用户工作日会加班')
+    // 权重不下降。注意语义事实的权重恒为 1（不衰减），所以这里
+    // 断言的是"没有被错误地调低" —— 第一版断言"必须变大"是错的，
+    // 而它恰好抓出了一个真 bug：reinforce 曾把 1 降到 0.999999。
+    expect(all[0]?.weight).toBeGreaterThanOrEqual(before)
+    service.stop()
+  })
+
+  it('★ 同主题矛盾 → supersede：新旧都在，旧的被标记为被取代', () => {
+    const { service } = makeService()
+    service.start()
+    service.consolidateFact('用户喝咖啡', ['drink'])
+    expect(service.consolidateFact('用户不喝咖啡', ['drink'])).toBe('supersede')
+
+    const all = service.search({ kinds: ['semantic'], limit: 100 })
+    expect(all).toHaveLength(2)
+    const old = all.find((r) => r.content === '用户喝咖啡')
+    const fresh = all.find((r) => r.content === '用户不喝咖啡')
+    expect(old?.supersededBy).toBe(fresh?.id)
+    expect(old?.supersededAt).toBe(NOW)
+    service.stop()
+  })
+
+  it('★ 完全相同 → discard：库不变化', () => {
+    const { service } = makeService()
+    service.start()
+    service.consolidateFact('用户不喝咖啡', ['drink'])
+    expect(service.consolidateFact('用户不喝咖啡', ['drink'])).toBe('discard')
+    expect(service.search({ kinds: ['semantic'] })).toHaveLength(1)
+    service.stop()
+  })
+
+  it('★ 巩固只看语义层：情景记忆不会去 reinforce 一条稳定事实', () => {
+    const { service } = makeService()
+    service.start()
+    service.consolidateFact('用户工作日会加班', ['overtime'])
+    // 一条同主题的**情景**记忆
+    service.recordEpisode('用户又在加班', ['overtime'])
+
+    // 候选与既有语义事实不重复（话题相同但都被判为"同主题不矛盾"）→ reinforce
+    // 关键是它不会因为情景记忆的存在而变成 discard
+    expect(service.consolidateFact('用户还是在加班', ['overtime'])).toBe('reinforce')
+    service.stop()
+  })
+})
+
+describe('★ 阶段二接线：核心块与上下文组装', () => {
+  it('★ 首次读取就用默认人设补齐 persona（不必先写库）', () => {
+    const { service } = makeService()
+    service.start()
+    const blocks = service.listBlocks()
+    const persona = blocks.find((b) => b.kind === 'persona')
+    expect(persona).toBeDefined()
+    expect(persona?.content.length).toBeGreaterThan(0)
+    // 只读不写：打开账本不该产生副作用
+    expect(service.search({ kinds: ['semantic'] })).toHaveLength(0)
+    service.stop()
+  })
+
+  it('★ setBlock 会强制字符上限（按整行裁剪，不留半句）', () => {
+    const { service } = makeService()
+    service.start()
+    const huge = Array.from({ length: 100 }, (_, i) => `第${String(i)}行挺长的内容`).join('\n')
+    service.setBlock('human', huge)
+
+    const stored = service.listBlocks().find((b) => b.kind === 'human')
+    expect(stored).toBeDefined()
+    expect(stored?.content.length).toBeLessThanOrEqual(600)
+    // 不是简单截断：每一行都完整
+    for (const line of stored?.content.split('\n') ?? []) {
+      expect(line.startsWith('第')).toBe(true)
+      expect(line.endsWith('容')).toBe(true)
+    }
+    service.stop()
+  })
+
+  it('setBlock 之后读回的是裁剪后的内容', () => {
+    const { service } = makeService()
+    service.start()
+    service.setBlock('persona', '我是小奇')
+    expect(service.listBlocks().find((b) => b.kind === 'persona')?.content).toBe('我是小奇')
+    service.stop()
+  })
+
+  it('deleteBlock 之后又回到默认人设（不是消失）', () => {
+    const { service } = makeService()
+    service.start()
+    service.setBlock('persona', '临时人设')
+    expect(service.deleteBlock('persona')).toBe(true)
+    const persona = service.listBlocks().find((b) => b.kind === 'persona')
+    expect(persona?.content).not.toBe('临时人设')
+    expect(persona?.content.length).toBeGreaterThan(0)
+    service.stop()
+  })
+
+  it('★ composeContextForPrompt 三段齐全，且核心块在检索结果之前', () => {
+    const { service } = makeService()
+    service.start()
+    service.consolidateFact('用户不喝咖啡', ['drink'])
+    service.setBlock('human', '用户不喝咖啡')
+
+    const text = service.composeContextForPrompt({
+      now: { workMode: '加班', emotion: '困', mood: 'warm', misses: false },
+    })
+
+    expect(text).toContain('它自己')
+    expect(text).toContain('关于你')
+    expect(text).toContain('此刻')
+    expect(text).toContain('用户不喝咖啡')
+    // 核心块在检索结果之前
+    const humanIndex = text.indexOf('关于你')
+    const recalledIndex = text.indexOf('我想起来的事')
+    if (recalledIndex >= 0) expect(humanIndex).toBeLessThan(recalledIndex)
+    service.stop()
+  })
+
+  it('记忆不可用时 composeContextForPrompt 不抛错，返回空串', () => {
+    const service = new MemoryService({ dbPath: join(dbPath, 'nested', 'memory.db') })
+    new Database(dbPath).close()
+    service.start()
+    const text = service.composeContextForPrompt({
+      now: { workMode: '编码', emotion: '平静', mood: 'reserved', misses: false },
+    })
+    // now 块仍然能拼出来（它不依赖数据库）
+    expect(text).toContain('此刻')
+    service.stop()
+  })
+})

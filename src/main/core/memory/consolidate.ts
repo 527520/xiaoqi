@@ -266,6 +266,17 @@ export function reinforcedWeight(current: number, times = 1): number {
   if (!Number.isFinite(current)) return 0
   const base = Math.min(1, Math.max(0, current))
   if (!Number.isFinite(times) || times <= 0) return base
+  /**
+   * ★ 已经在顶上时**原样返回 1**，不要"略低于 1"。
+   *
+   * 语义记忆的权重恒为 1（`currentWeight` 对语义层直接返回 1、不衰减），
+   * 所以它天生就在顶。若这里返回 `1 - 1e-6`，每次 reinforce 都会把一条
+   * 语义记忆的权重**从 1 降到 0.999999**——一个"加强"操作把权重调小了，
+   * 方向是反的。（被单测抓出来：`expected 0.999999 to be greater than 1`。）
+   *
+   * 语义上也对：已经是最大值时，"再确认一次"就该是幂等的。
+   */
+  if (base >= 1) return 1
   // 每次把"到 1 的距离"缩掉 18%
   const next = 1 - (1 - base) * Math.pow(0.82, times)
   // 钳住上界：渐近线在浮点下会被四舍五入突破

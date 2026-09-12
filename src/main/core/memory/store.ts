@@ -503,6 +503,20 @@ export class MemoryStore {
   }
 
   /**
+   * 改一条记忆的权重（`reinforce` 决策用它）。
+   *
+   * 单独一个方法而不是让调用方拼 SQL：权重的取值范围（[0,1]）
+   * 只该在一个地方被夹住。越界在这里被钳住而不是抛错——
+   * 触发它的只会是我们自己的算术，钳住比让整条维护流程崩掉好。
+   */
+  setWeight(id: number, weight: number): boolean {
+    if (!Number.isFinite(weight)) return false
+    const clamped = Math.min(1, Math.max(0, weight))
+    const info = this.#db.prepare('UPDATE memories SET weight = ? WHERE id = ?').run(clamped, id)
+    return info.changes > 0
+  }
+
+  /**
    * 用一条新事实**取代**一条旧事实（双时间字段，借鉴 Zep/Graphiti）。
    *
    * ── ⚠️ 这不是软删除，区别是本质的 ──

@@ -5,6 +5,21 @@ import Database from 'better-sqlite3'
 
 import type { Emotion, MemoryLedgerEntry } from '@shared/types'
 
+import {
+  BLOCK_LIMITS,
+  composeContext,
+  composeNowBlock,
+  defaultPersonaBlock,
+  fitBlock,
+  type MemoryBlock,
+  type MemoryBlockKind,
+  type NowBlockInput,
+} from '../core/memory/blocks'
+import {
+  planConsolidation,
+  reinforcedWeight,
+  type ConsolidationAction,
+} from '../core/memory/consolidate'
 import { shouldForget, type MemoryRecord } from '../core/memory/model'
 import { planPromotions, type PromotionPlan } from '../core/memory/promote'
 import { MemoryStore } from '../core/memory/store'
@@ -343,6 +358,138 @@ export class MemoryService {
   }
 
   // ── 内部 ──
+
+  /**
+   * 用**巩固决策**写入一条语义事实（阶段二的核心接线）。
+   *
+   * 四种结局各有明确的落地动作：
+   *
+   * | 决策 | 动作 |
+   * |---|---|
+   * | `new` | 直接写入 |
+   * | `reinforce` | **不新增**，把既有那条的权重按 `reinforcedWeight` 提上去 |
+   * | `supersede` | 写入新条，并把旧的标记为被取代（**不删**） |
+   * | `discard` | 什么都不做 |
+   *
+   * ── 与 `promote.ts` 的关系 ──
+   *
+   * `planPromotions` 决定"要不要从情景记忆里凝练出一条事实"，
+   * `planConsolidation` 决定"这条事实落到既有记忆上该怎么算"。
+   * 两者串起来用：前者产出候选，后者负责合并。
+   * 所以这个方法的入参是**候选事实**，而不是情景记忆。
+   *
+   * @returns 实际发生的事（供诊断与测试断言）
+   */
+  consolidateFact(content: string, tags: readonly string[]): ConsolidationAction {
+    const store = this.#store
+    if (!store) return 'discard'
+
+    try {
+      // 只取同层级的候选来比对：巩固是**语义记忆之间**的事。
+      // 拿情景记忆一起比会让"今天加了班"这种流水账去reinforce一条稳定事实。
+      const existing = store.search({ kinds: ['semantic'], limit: Number.MAX_SAFE_INTEGER })
+      const plan = planConsolidation({ candidate: { content, tags }, existing })
+
+      switch (plan.action) {
+        case 'new': {
+          store.addSemantic({ content, tags })
+          return 'new'
+        }
+        case 'reinforce': {
+          if (plan.targetId === undefined) return 'discard'
+          const target = store.get(plan.targetId)
+          if (!target) return 'discard'
+          store.setWeight(plan.targetId, reinforcedWeight(target.weight))
+          return 'reinforce'
+        }
+        case 'supersede': {
+          const newId = store.addSemantic({ content, tags })
+          if (plan.targetId !== undefined) store.supersede(plan.targetId, newId)
+          return 'supersede'
+        }
+        default:
+          return 'discard'
+      }
+    } catch (error) {
+      this.#noteFailure('巩固事实失败', error)
+      return 'discard'
+    }
+  }
+
+  // ── 核心记忆块（常驻上下文）──
+
+  /**
+   * 取全部核心块；库里没有的块用**默认值**补齐。
+   *
+   * `persona` 在首次运行时写入默认值，于是"它自己是谁"这件事
+   * 从第一天起就有内容——空的人设会让表达层没有可依据的语气。
+   */
+  listBlocks(): MemoryBlock[] {
+    const store = this.#store
+    if (!store) return []
+    try {
+      const stored = store.listBlocks()
+      const kinds = new Set(stored.map((block) => block.kind))
+      if (!kinds.has('persona')) {
+        // 默认人设不落库也可以工作，但落库之后用户才能在账本里改写它。
+        // 这里**只读不写**：读路径上产生副作用会让"打开账本"变成一次写入，
+        // 而账本可能只是被看一眼。
+        return [...stored, defaultPersonaBlock(this.#now())]
+      }
+      return stored
+    } catch (error) {
+      this.#noteFailure('读取核心块失败', error)
+      return []
+    }
+  }
+
+  /** 写一个核心块（记忆账本里编辑"它自己"/"关于你"走这里）。 */
+  setBlock(kind: MemoryBlockKind, content: string): boolean {
+    const store = this.#store
+    if (!store) return false
+    try {
+      // ★ 上限在这里强制一次：界面可能绕过，而常驻内容超限会
+      //   每一轮都多吃 token。`fitBlock` 按整行裁剪，不留半句。
+      store.setBlock(kind, fitBlock(content.split('\n'), BLOCK_LIMITS[kind]))
+      this.#onDiagnostic(`更新了核心块「${kind}」`)
+      return true
+    } catch (error) {
+      this.#noteFailure('写入核心块失败', error)
+      return false
+    }
+  }
+
+  /** 删一个核心块。 */
+  deleteBlock(kind: MemoryBlockKind): boolean {
+    const store = this.#store
+    if (!store) return false
+    try {
+      const removed = store.deleteBlock(kind)
+      if (removed) this.#onDiagnostic(`清空了核心块「${kind}」`)
+      return removed
+    } catch (error) {
+      this.#noteFailure('删除核心块失败', error)
+      return false
+    }
+  }
+
+  /**
+   * 组装要进 prompt 的上下文（核心块 + 检索到的记忆）。
+   *
+   * 这是阶段二对外的**唯一**出口：M4/M5 的 API 层拿到它就够了，
+   * 不需要知道内部有四层记忆、有巩固策略、有双时间字段。
+   */
+  composeContextForPrompt(options: { now: NowBlockInput; recalledLimit?: number }): string {
+    const recalled = this.search({ limit: options.recalledLimit ?? 10 }).map((r) => r.content)
+    return composeContext({
+      blocks: [
+        ...this.listBlocks().filter((block) => block.kind !== 'now'),
+        { kind: 'now', content: composeNowBlock(options.now), updatedAt: this.#now() },
+      ],
+      recalled,
+      ...(options.recalledLimit !== undefined ? { recalledLimit: options.recalledLimit } : {}),
+    })
+  }
 
   /** 库里"还没忘"的记忆（含 horizon 余量，口径与 `search` 一致）。 */
   #liveRecords(store: MemoryStore): MemoryRecord[] {
