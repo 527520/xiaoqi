@@ -257,6 +257,20 @@ export interface SearchOptions {
   /** 只看这个时刻之后的。 */
   readonly since?: number
   readonly limit?: number
+  /**
+   * 要不要包含**已被取代**的记录。
+   *
+   * ── ★ 默认 `'live'`，这一条是必须的，不是可选的美化 ★ ──
+   *
+   * 双时间字段让被推翻的旧事实留在库里（"以前是这么认为的"是历史）。
+   * 但**检索与拼 prompt 绝不能带上它们**：一条被取代的旧事实与新事实
+   * 是**互相矛盾**的（"用户喝咖啡" vs "用户不喝咖啡"），
+   * 两条同时进上下文会让模型按先到的那条答——也就是有一半概率用错。
+   *
+   * 这个默认值是**安全侧**：把历史显式打开（`'only'` / `'all'`）
+   * 比把"忘了排除"变成一次静默的错误召回要难得多。
+   */
+  readonly superseded?: 'live' | 'only' | 'all'
 }
 
 /**
@@ -390,6 +404,14 @@ export class MemoryStore {
     if (options.since !== undefined) {
       where.push('occurred_at >= ?')
       params.push(options.since)
+    }
+
+    // ★ 被取代的记录默认不出现在检索结果里。理由见 `SearchOptions.superseded`。
+    const superseded = options.superseded ?? 'live'
+    if (superseded === 'live') {
+      where.push('superseded_by IS NULL')
+    } else if (superseded === 'only') {
+      where.push('superseded_by IS NOT NULL')
     }
 
     const sql =

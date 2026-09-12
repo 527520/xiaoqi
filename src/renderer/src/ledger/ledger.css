@@ -324,3 +324,151 @@ body {
   color: var(--ink-soft);
   font-size: 11.5px;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+ * 阶段二：核心块 / 历史 / 上下文预览
+ *
+ * 这三块与"记忆列表"的视觉分工是刻意的：
+ *   - 记忆列表是**流水**（卡片式，一条条往下走）；
+ *   - 核心块是**正文**（常驻、每轮都带上），所以用更实的边框与底色，
+ *     读起来像一份要签字的文档，而不是又一条流水账。
+ * ══════════════════════════════════════════════════════════════════ */
+
+.blocks {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, #ffffff, #f7f9fc);
+}
+
+.blocks__title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.blocks__sub {
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+
+.block {
+  display: grid;
+  gap: 6px;
+}
+
+.block__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.block__label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.block__count {
+  color: var(--ink-soft);
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 11px;
+}
+
+/* 超限时才变红。正常状态下它只是个安静的提示，不抢注意力。 */
+.block__count--over {
+  color: var(--danger);
+  font-weight: 700;
+}
+
+.block__editor {
+  box-sizing: border-box;
+  inline-size: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--card);
+  color: var(--ink);
+  font-family: ui-serif, 'Songti SC', 'Noto Serif CJK SC', serif;
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.block__editor:focus-visible {
+  outline: 2px solid var(--accent);
+  border-color: var(--accent);
+}
+
+.block__hint {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+/* ── 历史视图 ── */
+
+.history__intro {
+  margin: 0 0 4px;
+  padding: 10px 12px;
+  border-inline-start: 3px solid var(--amber);
+  border-radius: 4px;
+  background: #fdf7ef;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.card--superseded {
+  /* 历史条目要读起来"退后一层"：降不透明度 + 去掉卡片阴影。 */
+  opacity: 0.72;
+  box-shadow: none;
+}
+
+.card__content--struck {
+  text-decoration: line-through;
+  text-decoration-color: var(--ink-soft);
+  text-decoration-thickness: 1px;
+}
+
+.tag--superseded {
+  background: #eee6dc;
+  color: #8a6a45;
+}
+
+/* ── 上下文预览 ── */
+
+.preview {
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  background: #fbfcfe;
+}
+
+.preview__summary {
+  padding: 10px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.preview__sub {
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.preview__body {
+  margin: 0;
+  padding: 0 12px 12px;
+  color: var(--ink);
+  font-family: ui-serif, 'Songti SC', 'Noto Serif CJK SC', serif;
+  font-size: 12.5px;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

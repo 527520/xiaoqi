@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 
-import type { MemoryLedgerEntry } from '@shared/types'
+import type { MemoryBlockKind, MemoryBlockView, MemoryLedgerEntry } from '@shared/types'
 
 /**
  * 记忆账本（施工令 §5 M3：「**可见、可删、可一键清空、可手动让它记住/忘掉**」）。
@@ -73,8 +73,140 @@ function formatTime(timestamp: number): string {
     : `${String(date.getFullYear())}年${monthDay}`
 }
 
+/**
+ * 核心记忆块编辑器（阶段二：常驻上下文）。
+ *
+ * ── 为什么它必须可编辑，而不是只读展示 ──
+ *
+ * 核心块**每一轮都进 prompt**（不参与相似度竞争）。一条说错了的常驻事实
+ * 比一百条检索式记忆更伤——它会持续影响宠物对用户的每一句话。
+ * 所以用户必须能看见它、改写它、清掉它。
+ *
+ * ── 为什么每块显示"还能写多少" ──
+ *
+ * 上限直接决定常驻内容吃掉多少 token。上限**只在主进程有一份真相**
+ * （随视图一起送过来），界面不复制一份——复制的那份会漂移，
+ * 而漂移的表现是"界面说还能写，实际被裁掉了"，用户完全无法理解。
+ */
+function BlockEditor({
+  block,
+  onSaved,
+  onError,
+}: {
+  block: MemoryBlockView
+  onSaved: () => Promise<void>
+  onError: (message: string) => void
+}): React.JSX.Element {
+  // ⚠️ 这里**刻意不**用「effect 监听 `block.content` 变化 → setDraft」那种写法。
+  //
+  // 那个写法有两个问题：① 在 effect 里同步 setState 会引发级联渲染
+  // （lint 也会拦）；② 它无法区分"外部数据变了"与"用户正在打字"——
+  // 用户打字打到一半、后台刚好刷新了一次，草稿就会被冲掉。
+  //
+  // 正确做法是**用 key 重置组件**：调用方把"服务端内容的版本"放进 key，
+  // 内容真的变了就换一个新实例，初始 state 自然取到新值；
+  // 而用户打字不会改 key，草稿因此不会被打断。
+  const [draft, setDraft] = useState(block.content)
+  const [pendingClear, setPendingClear] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!pendingClear) return
+    const timer = setTimeout(() => {
+      setPendingClear(false)
+    }, 3000)
+    return () => {
+      clearTimeout(timer)
+    }
+  }, [pendingClear])
+
+  const used = draft.length
+  const over = used > block.limit
+  const dirty = draft !== block.content
+
+  const save = useCallback(async () => {
+    setBusy(true)
+    try {
+      const ok = await window.xiaoqi.setBlock(block.kind, draft)
+      if (!ok) onError(`「${block.label}」没能写入（记忆可能不可用）`)
+      else onError('')
+      await onSaved()
+    } finally {
+      setBusy(false)
+    }
+  }, [block.kind, block.label, draft, onError, onSaved])
+
+  const clear = useCallback(async () => {
+    setBusy(true)
+    try {
+      await window.xiaoqi.clearBlock(block.kind)
+      setPendingClear(false)
+      await onSaved()
+    } finally {
+      setBusy(false)
+    }
+  }, [block.kind, onSaved])
+
+  return (
+    <section className="block">
+      <div className="block__head">
+        <span className="block__label">{block.label}</span>
+        {block.isDefault && (
+          <span className="tag tag--plain" title="还没落库，用的是内置默认内容">
+            默认
+          </span>
+        )}
+        <span className="card__spacer" />
+        {/* 计数超限时才变红：正常状态下它只是个安静的提示 */}
+        <span className={over ? 'block__count block__count--over' : 'block__count'}>
+          {used} / {block.limit}
+        </span>
+        <button
+          type="button"
+          className="btn btn--sm btn--primary"
+          onClick={() => void save()}
+          disabled={!dirty || busy}
+        >
+          保存
+        </button>
+        <button
+          type="button"
+          className={pendingClear ? 'btn btn--sm btn--danger' : 'btn btn--sm'}
+          onClick={() => {
+            if (pendingClear) void clear()
+            else setPendingClear(true)
+          }}
+          disabled={busy || block.content.length === 0}
+        >
+          {pendingClear ? '确定清空？' : '清空'}
+        </button>
+      </div>
+      <textarea
+        className="block__editor"
+        value={draft}
+        rows={block.kind === 'now' ? 2 : 4}
+        onChange={(event) => {
+          setDraft(event.target.value)
+        }}
+        aria-label={`编辑「${block.label}」`}
+      />
+      <p className="block__hint">{BLOCK_HINT[block.kind]}</p>
+    </section>
+  )
+}
+
+/** 每个块一句话解释。用户看不懂"核心块"是什么意思。 */
+const BLOCK_HINT: Record<MemoryBlockKind, string> = {
+  persona: '它每句话都会带着这段。**只描述它自己**，不要写成对用户的评价。',
+  human: '关于你的稳定事实，每次都会带上——适合放"它绝对不能忘"的事。',
+  now: '当下的处境与状态，由它自己填。',
+}
+
 export function Ledger(): React.JSX.Element {
   const [entries, setEntries] = useState<MemoryLedgerEntry[]>([])
+  const [blocks, setBlocks] = useState<MemoryBlockView[]>([])
+  const [superseded, setSuperseded] = useState<MemoryLedgerEntry[]>([])
+  const [contextPreview, setContextPreview] = useState('')
   const [query, setQuery] = useState('')
   const [draft, setDraft] = useState('')
   const [loading, setLoading] = useState(true)
@@ -83,6 +215,8 @@ export function Ledger(): React.JSX.Element {
   const [pendingForgetId, setPendingForgetId] = useState<number | null>(null)
   /** 「清空全部」是否在等待确认。 */
   const [pendingClearAll, setPendingClearAll] = useState(false)
+  /** 主列表 vs 历史视图。 */
+  const [view, setView] = useState<'current' | 'history'>('current')
 
   /**
    * 按关键词重新拉取列表。
@@ -98,7 +232,8 @@ export function Ledger(): React.JSX.Element {
    */
   const refresh = useCallback(async (searchText: string) => {
     try {
-      const list = await window.xiaoqi.listMemories(searchText.trim() || undefined)
+      const text = searchText.trim() || undefined
+      const list = await window.xiaoqi.listMemories(text)
       setEntries(list)
       setError(null)
     } catch (cause) {
@@ -108,16 +243,39 @@ export function Ledger(): React.JSX.Element {
     }
   }, [])
 
+  /**
+   * 刷新阶段二那三块内容（核心块 / 历史 / 上下文预览）。
+   *
+   * 与 `refresh` 分开是因为它们的**读取时机不同**：列表跟着搜索词走，
+   * 而这三样与搜索词无关。合成一个的话，每次敲一个字都要重算一遍
+   * 上下文预览——那是主进程在拼字符串，纯浪费。
+   */
+  const refreshBlocks = useCallback(async () => {
+    try {
+      const [nextBlocks, history, preview] = await Promise.all([
+        window.xiaoqi.listBlocks(),
+        window.xiaoqi.listSuperseded(),
+        window.xiaoqi.previewContext(),
+      ])
+      setBlocks(nextBlocks)
+      setSuperseded(history)
+      setContextPreview(preview)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [])
+
   // 首次挂载时读一次。刻意只在挂载时跑：之后的每次刷新都由
   // 具体动作（输入、点刷新、增删）显式触发。
   useEffect(() => {
     const timer = setTimeout(() => {
       void refresh('')
+      void refreshBlocks()
     }, 0)
     return () => {
       clearTimeout(timer)
     }
-  }, [refresh])
+  }, [refresh, refreshBlocks])
 
   // 「确定删？」三秒后自动收回，避免它一直挂在那里等着被误点。
   useEffect(() => {
@@ -150,8 +308,11 @@ export function Ledger(): React.JSX.Element {
         setError('这条记忆没能删掉（可能已经被清理过了）')
       }
       await refresh(query)
+      // 删一条可能让整个取代链条一起消失（用户的删除是承诺），
+      // 所以历史视图必须跟着重读。
+      await refreshBlocks()
     },
-    [query, refresh],
+    [query, refresh, refreshBlocks],
   )
   const forgetAll = useCallback(async () => {
     const removed = await window.xiaoqi.forgetAllMemories()
@@ -160,7 +321,8 @@ export function Ledger(): React.JSX.Element {
     // ★ 用 removed 而不是本地列表长度：以数据库实际删掉的条数为准。
     if (removed === 0) setError('没有可清空的记忆')
     await refresh(query)
-  }, [query, refresh])
+    await refreshBlocks()
+  }, [query, refresh, refreshBlocks])
 
   const remember = useCallback(async () => {
     const content = draft.trim()
@@ -180,7 +342,9 @@ export function Ledger(): React.JSX.Element {
     //    于是上面那个 `useEffect` 根本不触发，新写入的记忆就不会出现
     //    ——用户看到的是"点了没反应"，而数据其实已经写进去了。
     await refresh('')
-  }, [draft, refresh])
+    // 手写的事实也要出现在上下文预览里，否则用户会以为它没被采纳。
+    await refreshBlocks()
+  }, [draft, refresh, refreshBlocks])
 
   // 各层级的条数，用于顶部那句"它现在记得多少"。
   const counts = useMemo(() => {
@@ -204,6 +368,22 @@ export function Ledger(): React.JSX.Element {
         </div>
         <button
           type="button"
+          className="btn"
+          onClick={() => {
+            setView(view === 'current' ? 'history' : 'current')
+          }}
+          title={
+            view === 'history'
+              ? '回到它现在记得的事'
+              : '看它以前是这么认为的（被新事实取代的旧事实）'
+          }
+        >
+          {view === 'history'
+            ? '回到当前'
+            : `历史${superseded.length > 0 ? ` (${String(superseded.length)})` : ''}`}
+        </button>
+        <button
+          type="button"
           className={pendingClearAll ? 'btn btn--danger' : 'btn'}
           onClick={() => {
             if (pendingClearAll) void forgetAll()
@@ -214,6 +394,32 @@ export function Ledger(): React.JSX.Element {
           {pendingClearAll ? '确定全部删掉？' : '清空全部'}
         </button>
       </header>
+
+      {/* ── 核心记忆块（常驻上下文）── */}
+      {view === 'current' && blocks.length > 0 && (
+        <section className="blocks">
+          <h2 className="blocks__title">
+            它一直记着的
+            <span className="blocks__sub">
+              这几段每次都会带上，不参与检索——所以必须短，也必须准。
+            </span>
+          </h2>
+          {blocks.map((block) => (
+            <BlockEditor
+              // ★ key 里带上"内容的版本"，内容真的变了才换实例。
+              //   用 `block.content` 而不是 `updatedAt`：清空之后重新落到
+              //   默认人设时，`updatedAt` 可能仍是旧值（读路径不写库），
+              //   而内容确实换了。以内容为准最稳。
+              key={`${block.kind}:${block.content}`}
+              block={block}
+              onSaved={refreshBlocks}
+              onError={(message) => {
+                setError(message.length > 0 ? message : null)
+              }}
+            />
+          ))}
+        </section>
+      )}
 
       <div className="ledger__toolbar">
         <input
@@ -267,7 +473,53 @@ export function Ledger(): React.JSX.Element {
 
       {error !== null && <p className="ledger__error">{error}</p>}
 
-      {!loading && entries.length === 0 ? (
+      {view === 'history' ? (
+        <section className="history">
+          <p className="history__intro">
+            这些是它**以前**认为的事。被新事实推翻之后它们不再参与回应，但保留下来——
+            所以你能看出它改过什么主意。（点「忘掉」仍是真的删除。）
+          </p>
+          {superseded.length === 0 ? (
+            <p className="ledger__empty">它还没有改过主意。</p>
+          ) : (
+            <ul className="ledger__list">
+              {superseded.map((entry) => (
+                <li key={entry.id} className="card card--superseded">
+                  <div className="card__head">
+                    <span className="tag tag--superseded">旧事实</span>
+                    <time
+                      className="card__time"
+                      dateTime={new Date(entry.occurredAt).toISOString()}
+                    >
+                      {formatTime(entry.occurredAt)}
+                    </time>
+                    {entry.supersededAt !== undefined && (
+                      <span className="card__origin">{formatTime(entry.supersededAt)}被取代</span>
+                    )}
+                    <span className="card__spacer" />
+                    <button
+                      type="button"
+                      className={
+                        pendingForgetId === entry.id ? 'btn btn--sm btn--danger' : 'btn btn--sm'
+                      }
+                      onClick={() => {
+                        if (pendingForgetId === entry.id) void forget(entry.id)
+                        else setPendingForgetId(entry.id)
+                      }}
+                    >
+                      {pendingForgetId === entry.id ? '确定删？' : '忘掉'}
+                    </button>
+                  </div>
+                  <p className="card__content card__content--struck">{entry.content}</p>
+                  <p className="card__origin">
+                    现在信的是这一条（#{String(entry.supersededBy ?? '?')}）
+                  </p>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : !loading && entries.length === 0 ? (
         <p className="ledger__empty">
           {query.trim().length > 0
             ? `没有记得「${query.trim()}」相关的事。`
@@ -340,6 +592,17 @@ export function Ledger(): React.JSX.Element {
             </li>
           ))}
         </ul>
+      )}
+
+      {/* ── 上下文预览（阶段二对外的唯一出口）── */}
+      {view === 'current' && contextPreview.length > 0 && (
+        <details className="preview">
+          <summary className="preview__summary">
+            它此刻带着的上下文
+            <span className="preview__sub">（接上大模型之后，这段就是每轮真正送过去的内容）</span>
+          </summary>
+          <pre className="preview__body">{contextPreview}</pre>
+        </details>
       )}
 
       <footer className="ledger__footer">

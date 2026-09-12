@@ -180,12 +180,47 @@ describe('MemoryService · 反复发生升级为语义记忆', () => {
     expect(semantic[0]?.content).toContain('overtime')
     expect(service.search({ kinds: ['episodic'] })).toHaveLength(0)
 
-    // ★ 诊断里说了"升级了哪个主题"，但**没有**任何一条记忆原文。
+    // ★ 来源必须留下来（账本靠它回答"你为什么记得这个"）。
+    //
+    // 这一条是修的 bug：升级路径改成走 `consolidateFact` 时，一开始漏传了
+    // `plan.derivedFrom`，而 `addSemantic` 对它是可选的——**不传也能跑**，
+    // 只是账本从此只能显示一句没有来由的结论。可选参数漏传不会报错，
+    // 所以只能靠断言钉住。
+    expect(semantic[0]?.derivedFrom).toBeDefined()
+    const sourceId = semantic[0]?.derivedFrom
+    expect(typeof sourceId).toBe('number')
+
+    // ★ 诊断里说了"升级了哪个主题"与落成了哪种结局，但**没有**记忆原文。
     const log = diagnostics.join('\n')
     expect(log).toContain('overtime')
+    expect(log).toContain('new')
     for (let n = 1; n <= SEMANTIC_PROMOTION_THRESHOLD; n++) {
       expect(log).not.toContain(`第 ${String(n)} 次加班`)
     }
+    service.stop()
+  })
+
+  it('★ 升级走的是巩固决策，不是直接写入（同主题再攒够时得到 reinforce 而不是第二条）', () => {
+    const { service } = makeService()
+    service.start()
+
+    for (let n = 1; n <= SEMANTIC_PROMOTION_THRESHOLD; n++) {
+      service.recordEpisode(`第 ${String(n)} 次加班`, ['overtime'], NOW + n)
+    }
+    expect(service.runMaintenance().promoted).toBe(1)
+    const first = service.search({ kinds: ['semantic'] })
+    expect(first).toHaveLength(1)
+    const firstId = first[0]?.id
+
+    // 直接对同主题候选调用巩固：既有事实已存在且不矛盾 → 加强，不新增。
+    // 这一条证明"升级路径与巩固路径用的是同一套决策"——如果升级仍是
+    // 直接 `addSemantic`，这里会攒出第二条几乎一样的事实。
+    expect(service.consolidateFact('用户又加班了', ['overtime'])).toBe('reinforce')
+    const after = service.search({ kinds: ['semantic'] })
+    expect(after).toHaveLength(1)
+    expect(after[0]?.id).toBe(firstId)
+    // 语义记忆权重恒为 1，所以断言的是"没被错误地调低"。
+    expect(after[0]?.weight).toBeGreaterThanOrEqual(1)
     service.stop()
   })
 
@@ -363,10 +398,22 @@ describe('★ 阶段二接线：巩固决策落到真实库里', () => {
     service.consolidateFact('用户喝咖啡', ['drink'])
     expect(service.consolidateFact('用户不喝咖啡', ['drink'])).toBe('supersede')
 
-    const all = service.search({ kinds: ['semantic'], limit: 100 })
-    expect(all).toHaveLength(2)
-    const old = all.find((r) => r.content === '用户喝咖啡')
-    const fresh = all.find((r) => r.content === '用户不喝咖啡')
+    // ★ 历史视图（显式要 `'only'`）里两条都在——旧事实是历史，不是被删了。
+    const history = service.search({ kinds: ['semantic'], superseded: 'only', limit: 100 })
+    expect(history).toHaveLength(1)
+    const old = history.find((r) => r.content === '用户喝咖啡')
+    expect(old).toBeDefined()
+
+    // ★ 而**默认检索**只有新的那条。
+    //
+    // 这一条是修的 bug，不是测试凑数：`search` 原来不过滤 `superseded_by`，
+    // 于是"用户喝咖啡"和"用户不喝咖啡"会**同时**进 prompt。
+    // 两条互相矛盾的事实一起进上下文，模型按先到的那条答 ——
+    // 也就是有一半概率用错，而这是最难被察觉的一类错误。
+    const live = service.search({ kinds: ['semantic'], limit: 100 })
+    expect(live).toHaveLength(1)
+    const fresh = live[0]
+    expect(fresh?.content).toBe('用户不喝咖啡')
     expect(old?.supersededBy).toBe(fresh?.id)
     expect(old?.supersededAt).toBe(NOW)
     service.stop()
@@ -405,6 +452,59 @@ describe('★ 阶段二接线：核心块与上下文组装', () => {
     expect(persona?.content.length).toBeGreaterThan(0)
     // 只读不写：打开账本不该产生副作用
     expect(service.search({ kinds: ['semantic'] })).toHaveLength(0)
+    service.stop()
+  })
+
+  it('★ 三个块**总是**都在，且带上限与"是否默认值"标记', () => {
+    // ── 这条守的是一个真实的坑 ──
+    //
+    // 初版有两个读取方法（内部用的 `listBlocks` 与界面用的 `listBlockViews`），
+    // 而 `composeContextForPrompt` 走的是**没有兜底**的那一个：库里还没有
+    // persona 时它拿到空数组，"它自己是谁"那一段整段消失——而默认人设
+    // 本来就是为了"从第一天起就有语气可用"才存在的。
+    //
+    // 所以断言的不是"有内容"，而是**三段齐全 + 兜底生效**，
+    // 这样将来再拆出第二个读取路径时会被立刻抓住。
+    const { service } = makeService()
+    service.start()
+    const blocks = service.listBlocks()
+    expect(blocks.map((b) => b.kind)).toEqual(['persona', 'human', 'now'])
+
+    const persona = blocks.find((b) => b.kind === 'persona')
+    expect(persona?.isDefault).toBe(true)
+    expect(persona?.limit).toBe(400)
+    // 界面要显示"还能写多少"，所以上限必须随视图一起送出来
+    expect(blocks.every((b) => typeof b.limit === 'number' && b.limit > 0)).toBe(true)
+    // 中文块名也在这里拼好（渲染进程不该 import 主进程的 core/）
+    expect(persona?.label).toBe('它自己')
+
+    // ★ 而拼出来的上下文里**真的**有人设那一段 —— 这才是兜底的目的
+    const text = service.composeContextForPrompt({
+      now: { workMode: 'coding', emotion: 'calm', mood: 'reserved', misses: false },
+    })
+    expect(text).toContain('【它自己】')
+    expect(text).toContain('小奇')
+    service.stop()
+  })
+
+  it('★ 写过的 persona 不再是默认值（界面的"未落库"提示要准）', () => {
+    const { service } = makeService()
+    service.start()
+    service.setBlock('persona', '我是另一只小动物')
+    const persona = service.listBlocks().find((b) => b.kind === 'persona')
+    expect(persona?.isDefault).toBe(false)
+    expect(persona?.content).toBe('我是另一只小动物')
+    service.stop()
+  })
+
+  it('★ human / now 空着就是真的空（不给它们编造内容）', () => {
+    // persona 有兜底是因为"它自己是谁"必须有起始内容；
+    // human 兜底就等于**它记得一些你没说过的事**——那是很糟的错觉。
+    const { service } = makeService()
+    service.start()
+    const human = service.listBlocks().find((b) => b.kind === 'human')
+    expect(human?.content).toBe('')
+    expect(human?.isDefault).toBe(false)
     service.stop()
   })
 

@@ -15,6 +15,15 @@ import { currentWeight, type MemoryRecord } from '../core/memory/model'
  * 因此强度一律由主进程用 `currentWeight()` 算好再送出去。
  * 界面上不做任何衰减计算。
  */
+/**
+ * 一条账本条目在时间线上的状态。
+ *
+ * 三态而不是布尔：`supersededBy` 让用户能回答"它现在改成了什么"，
+ * 而只给一个 `superseded: true` 的话界面只能说"这条过期了"，
+ * 用户还得自己去猜现在信哪条。
+ */
+export type LedgerState = 'current' | 'superseded'
+
 export function toLedgerEntry(record: MemoryRecord, now: number): MemoryLedgerEntry {
   const kind = record.kind === 'working' ? 'episodic' : record.kind
 
@@ -34,5 +43,11 @@ export function toLedgerEntry(record: MemoryRecord, now: number): MemoryLedgerEn
     // 用户手写的事实没有来源（`derivedFrom` 为空且是语义层），
     // 或者是它自己推断出来的——后者一定带 derivedFrom。
     userAuthored: record.kind === 'semantic' && record.derivedFrom === undefined,
+    // ★ 被取代的历史。默认列表里不会出现它们（`search` 的默认过滤），
+    //   只有"历史"视图显式要。带上 `supersededBy` 是为了让界面能标出
+    //   "现在信的是哪一条"，而不是只告诉用户"这条过期了"。
+    superseded: record.supersededBy !== undefined,
+    ...(record.supersededBy !== undefined ? { supersededBy: record.supersededBy } : {}),
+    ...(record.supersededAt !== undefined ? { supersededAt: record.supersededAt } : {}),
   }
 }

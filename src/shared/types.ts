@@ -296,6 +296,41 @@ export interface PetRuntimeState {
  */
 export type RelationshipMood = 'reserved' | 'warm' | 'attached'
 
+/** 核心块的种类（与 `core/memory/blocks.ts` 的 `MemoryBlockKind` 一致）。 */
+export type MemoryBlockKind =
+  /** 它自己是谁、什么脾气。**只描述宠物自己。** */
+  | 'persona'
+  /** 关于用户的稳定事实。 */
+  | 'human'
+  /** 当前会话状态（模式/情绪/关系基调）。 */
+  | 'now'
+
+/**
+ * 账本界面用的核心块视图。
+ *
+ * ⚠️ 带上 `limit` 而不是让界面自己去 import `BLOCK_LIMITS`：
+ *    渲染进程 import 主进程的 `core/` 是架构越界（那正是我们把
+ *    蒙版编解码放进 `shared/` 的原因），而复制一份上限就是等着两边漂移。
+ *    上限决定了"常驻内容吃多少 token"，漂移的代价是预算失控。
+ */
+export interface MemoryBlockView {
+  readonly kind: MemoryBlockKind
+  /** 界面上的中文名（「它自己」/「关于你」/「此刻」）。 */
+  readonly label: string
+  readonly content: string
+  /** 字符上限。 */
+  readonly limit: number
+  /** 最后修改时刻（Unix 毫秒）。 */
+  readonly updatedAt: number
+  /**
+   * 是不是**默认值**（库里没有这一行，用兜底内容顶上）。
+   *
+   * 界面据此提示"这条还没落库"，否则用户改完再打开会发现改动"没生效"
+   * ——其实只是从没写过库。
+   */
+  readonly isDefault: boolean
+}
+
 /**
  * 记忆账本里的一行（M3）。
  *
@@ -338,4 +373,15 @@ export interface MemoryLedgerEntry {
    * 也不该让用户以为"这是它自己总结出来的"。
    */
   readonly userAuthored: boolean
+  /**
+   * 这条事实是不是**已被新事实取代**（双时间字段）。
+   *
+   * `true` 时它只出现在账本的"历史"视图里，**不会**进检索与 prompt——
+   * 旧事实与新事实是互相矛盾的，两条同时进上下文等于让模型掷硬币。
+   */
+  readonly superseded?: boolean
+  /** 取代它的那一条的 id（界面据此标出"现在信的是哪条"）。 */
+  readonly supersededBy?: number
+  /** 被取代的时刻（Unix 毫秒）。 */
+  readonly supersededAt?: number
 }

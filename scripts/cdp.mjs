@@ -177,9 +177,32 @@ export async function connectCdp(browserUrl, targetUrlIncludes, { timeoutMs = 25
       return result?.result?.value
     },
 
-    /** 截页面（走合成结果，WebGL 也截得到）。返回 base64。 */
-    async screenshot() {
-      const shot = await send('Page.captureScreenshot', { format: 'png' }, sessionId)
+    /**
+     * 截页面（走合成结果，WebGL 也截得到）。返回 base64。
+     *
+     * @param {{ fullPage?: boolean }} [options] `fullPage` 会把整个可滚动区域
+     *        截下来，而不是只截视口。给"要在一张图里看完整页"的取证用——
+     *        视口截图会把折叠线以下的内容整段丢掉，而那种丢失**看起来
+     *        像内容不存在**（踩过一次：以为列表没渲染，其实只是没截到）。
+     */
+    async screenshot(options = {}) {
+      const params = { format: 'png' }
+      if (options.fullPage) {
+        // 先量出内容真实尺寸，再让它一次性截出来。
+        const metrics = await send('Page.getLayoutMetrics', {}, sessionId)
+        const size = metrics?.cssContentSize ?? metrics?.contentSize
+        if (size) {
+          params.captureBeyondViewport = true
+          params.clip = {
+            x: 0,
+            y: 0,
+            width: Math.ceil(size.width),
+            height: Math.ceil(size.height),
+            scale: 1,
+          }
+        }
+      }
+      const shot = await send('Page.captureScreenshot', params, sessionId)
       if (!shot?.data) throw new Error('截图失败：没有 data')
       return shot.data
     },

@@ -19,6 +19,7 @@ import { PROCEDURAL_PET, type PetDefinition } from '@shared/petDefinition'
 import type {
   DisturbLevel,
   Emotion,
+  MemoryBlockKind,
   PetRenderInfo,
   PetRuntimeState,
   VisibilityMode,
@@ -581,6 +582,64 @@ function registerIpc(): void {
     if (content.length === 0) return null
     return memory?.remember(content) ?? null
   })
+
+  // ── 核心记忆块与历史（阶段二）──
+  //
+  // ⚠️ 这几条通道返回的值里**有记忆内容**，所以它们只回给调用了的窗口，
+  //    **一律不进日志**（§1.2⑪：日志不是内容的留痕渠道）。
+  //    下面每一处都没有 `log(...)`，这不是遗漏。
+
+  ipcMain.handle(IPC.memoryBlocks, () => memory?.listBlocks() ?? [])
+
+  ipcMain.handle(IPC.memoryBlockSet, (_event, rawKind: unknown, rawContent: unknown) => {
+    const kind = asBlockKind(rawKind)
+    if (!kind) throw new Error(`非法的核心块种类：${String(rawKind)}`)
+    if (typeof rawContent !== 'string') throw new Error('核心块内容必须是字符串')
+    return memory?.setBlock(kind, rawContent) ?? false
+  })
+
+  ipcMain.handle(IPC.memoryBlockClear, (_event, rawKind: unknown) => {
+    const kind = asBlockKind(rawKind)
+    if (!kind) throw new Error(`非法的核心块种类：${String(rawKind)}`)
+    return memory?.deleteBlock(kind) ?? false
+  })
+
+  ipcMain.handle(IPC.memorySuperseded, (_event, query: unknown) => {
+    const text = typeof query === 'string' && query.trim().length > 0 ? query.trim() : undefined
+    return memory?.listSuperseded(text) ?? []
+  })
+
+  /**
+   * 预览下一次会拼进 prompt 的上下文。
+   *
+   * ★ 为什么给它一条通道，而不是等 LLM 层接上再说 ——
+   *
+   * `composeContextForPrompt` 是阶段二对外的**唯一**出口。在 LLM 层接上之前
+   * 它没有真实消费者，而**没有消费者的代码没人会发现它坏了**。
+   * 让账本能显示这段文本，等于给它一个每天都有人看的出口，
+   * 顺便也是最有说服力的证据：四层记忆拼出来到底长什么样。
+   */
+  ipcMain.handle(IPC.memoryContextPreview, () => {
+    const snapshot = perception?.snapshot
+    return (
+      memory?.composeContextForPrompt({
+        now: {
+          workMode: snapshot?.workMode ?? 'rest',
+          emotion: snapshot?.emotion.emotion ?? 'calm',
+          mood: snapshot?.mood ?? 'reserved',
+          // ★ 直接用感知层的 `misses`，不要在这里按生理量再算一遍。
+          //   两处各算一次就是等着漂移，而它们漂移的表现是
+          //   "面板说有想念、拼进 prompt 的文本里却没有"，极难定位。
+          misses: snapshot?.misses ?? false,
+        },
+      }) ?? ''
+    )
+  })
+}
+
+/** 把 IPC 来的值收窄成核心块种类。非法时返回 null（调用方抛错）。 */
+function asBlockKind(raw: unknown): MemoryBlockKind | null {
+  return raw === 'persona' || raw === 'human' || raw === 'now' ? raw : null
 }
 
 /**

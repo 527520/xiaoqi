@@ -177,3 +177,31 @@ export function compareMidRows(a, b, threshold = 6) {
   }
   return { differing, maxDelta }
 }
+
+/**
+ * 数一数画面里有多少种**不同的颜色**（网格采样）。
+ *
+ * ── 它是用来区分"渲染出了内容"与"一张空白图"的 ──
+ *
+ * 这个判据的要点是**它能失败**：纯色图（比如全白）的唯一色数恰好是 1，
+ * 而一屏有文字、卡片、边框的界面必然是几十上百种。
+ * 所以调用方一定要配一个"喂纯色图 → 判据失败"的反例，
+ * 否则无法排除"这个统计对任何输入都返回一个大数"。
+ *
+ * 采样而不是全扫：截图动辄上百万像素，而我们要的只是
+ * "是不是只有一两种颜色"，网格采样完全够用且快得多。
+ *
+ * @param step 采样步长（像素）。默认 4，即每 16 个像素看一个。
+ */
+export function countUniqueColors(image, { step = 4 } = {}) {
+  const { width, height, rgba } = image
+  const seen = new Set()
+  for (let y = 0; y < height; y += step) {
+    for (let x = 0; x < width; x += step) {
+      const i = (y * width + x) * 4
+      // 把 alpha 也算进去：全透明与纯黑是不同的东西，不能混为一谈。
+      seen.add((rgba[i] << 24) | (rgba[i + 1] << 16) | (rgba[i + 2] << 8) | rgba[i + 3])
+    }
+  }
+  return seen.size
+}

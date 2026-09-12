@@ -30,6 +30,7 @@
     "verify:memory-delete": "node scripts/verify-memory-delete.mjs",
     "verify:memory-wiring": "node scripts/verify-memory-wiring.mjs",
     "verify:ledger": "node scripts/verify-ledger.mjs",
+    "verify:ledger-blocks": "node scripts/verify-ledger-blocks.mjs",
     "verify:m2": "node scripts/verify-m2.mjs",
     "verify:sprite": "node scripts/verify-sprite.mjs",
     "verify:sprite-live": "node scripts/verify-sprite-live.mjs",

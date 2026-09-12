@@ -2,7 +2,13 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 import { IPC } from '../shared/ipc'
 import type { XiaoqiBridge } from '../shared/ipc'
-import type { MemoryLedgerEntry, PetRuntimeState, VisibilityMode } from '../shared/types'
+import type {
+  MemoryBlockKind,
+  MemoryBlockView,
+  MemoryLedgerEntry,
+  PetRuntimeState,
+  VisibilityMode,
+} from '../shared/types'
 
 /**
  * preload —— 主进程与渲染进程之间**唯一的**桥。
@@ -77,6 +83,21 @@ const bridge: XiaoqiBridge = {
 
   rememberFact: (content: string) =>
     ipcRenderer.invoke(IPC.memoryRemember, content) as Promise<number | null>,
+
+  // ── 核心记忆块与历史（阶段二）──
+
+  listBlocks: () => ipcRenderer.invoke(IPC.memoryBlocks) as Promise<MemoryBlockView[]>,
+
+  setBlock: (kind: MemoryBlockKind, content: string) =>
+    ipcRenderer.invoke(IPC.memoryBlockSet, kind, content) as Promise<boolean>,
+
+  clearBlock: (kind: MemoryBlockKind) =>
+    ipcRenderer.invoke(IPC.memoryBlockClear, kind) as Promise<boolean>,
+
+  listSuperseded: (query?: string) =>
+    ipcRenderer.invoke(IPC.memorySuperseded, query) as Promise<MemoryLedgerEntry[]>,
+
+  previewContext: () => ipcRenderer.invoke(IPC.memoryContextPreview) as Promise<string>,
 }
 
 contextBridge.exposeInMainWorld('xiaoqi', bridge)

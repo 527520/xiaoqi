@@ -1,4 +1,10 @@
-import type { MemoryLedgerEntry, PetRuntimeState, VisibilityMode } from './types'
+import type {
+  MemoryBlockKind,
+  MemoryBlockView,
+  MemoryLedgerEntry,
+  PetRuntimeState,
+  VisibilityMode,
+} from './types'
 
 /**
  * IPC 通道清单 —— **白名单**，施工令 §4.4。
@@ -99,6 +105,39 @@ export const IPC = {
   memoryForgetAll: 'memory:forget-all',
   /** 手动"让它记住"一条事实（invoke → 新记忆 id，失败为 null）。 */
   memoryRemember: 'memory:remember',
+
+  // ── 核心记忆块与历史（阶段二）──
+
+  /**
+   * 读全部核心块（invoke → `MemoryBlockView[]`）。
+   *
+   * 核心块是**常驻上下文**（每次拼 prompt 都带），所以界面上必须能看见
+   * 与改写——否则用户无法知道"它一直记得关于我的什么"，
+   * 也没法纠正一条说错了的常驻事实。
+   */
+  memoryBlocks: 'memory:blocks',
+  /** 写一个核心块（invoke → 是否成功）。 */
+  memoryBlockSet: 'memory:block-set',
+  /** 清空一个核心块（invoke → 是否真的删掉了）。 */
+  memoryBlockClear: 'memory:block-clear',
+  /**
+   * 读**已被取代**的旧事实（invoke → `MemoryLedgerEntry[]`）。
+   *
+   * 双时间字段让"新事实推翻旧事实"时旧条留在库里当历史。
+   * 主列表里看不到它们（`search` 默认只给当前有效的），
+   * 但要有一个地方能回答"它以前是这么认为的"。
+   */
+  memorySuperseded: 'memory:superseded',
+  /**
+   * 预览**下一次会拼进 prompt 的上下文**（invoke → 字符串）。
+   *
+   * 阶段二的对外唯一出口是 `composeContextForPrompt`，而在 LLM 层接上之前
+   * 它没有真实消费者。没有消费者就意味着**没人会注意到它坏了**——
+   * 所以给它一个可见的出口：账本里显示这段文本。
+   * 它同时也是最有说服力的证据：四层记忆（核心块 / 情景 / 语义 / 情感）
+   * 最终长什么样，一眼看完。
+   */
+  memoryContextPreview: 'memory:context-preview',
 } as const
 
 /** 通道名字面量联合类型，防止拼写漂移。 */
@@ -159,6 +198,24 @@ export interface XiaoqiBridge {
   forgetAllMemories(): Promise<number>
   /** 手动"让它记住"一条事实。返回新记忆的 id，失败为 null。 */
   rememberFact(content: string): Promise<number | null>
+
+  // ── 核心记忆块与历史（阶段二）──
+
+  /** 读全部核心块（含字符上限，界面据此显示"还能写多少"）。 */
+  listBlocks(): Promise<MemoryBlockView[]>
+  /** 写一个核心块。超限由主进程按整行裁剪，返回裁剪后是否写入成功。 */
+  setBlock(kind: MemoryBlockKind, content: string): Promise<boolean>
+  /** 清空一个核心块（`persona` 清空后会回落到默认人设）。 */
+  clearBlock(kind: MemoryBlockKind): Promise<boolean>
+  /** 读**已被取代**的旧事实（历史视图）。 */
+  listSuperseded(query?: string): Promise<MemoryLedgerEntry[]>
+  /**
+   * 预览下一次会拼进 prompt 的上下文。
+   *
+   * ⚠️ 返回值里**有记忆内容**，所以它只走 invoke 回给界面，
+   *    **不写日志**（§1.2⑪：日志不是内容的留痕渠道）。
+   */
+  previewContext(): Promise<string>
 }
 
 declare global {
