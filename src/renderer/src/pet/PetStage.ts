@@ -1,6 +1,7 @@
 import { type Application, Container, FillGradient, Graphics } from 'pixi.js'
 
 import { PET_GEOMETRY } from '@shared/constants'
+import { hitTestPet, scalePetGeometry } from '@shared/geometry'
 import { PET_BODY, PET_FACE, PET_PALETTE, PET_STROKE_WIDTH } from '@shared/palette'
 import type { Emotion, RelationshipMood } from '@shared/types'
 
@@ -175,19 +176,51 @@ export class PetStage {
 
     app.stage.addChild(this.#root)
     app.stage.eventMode = 'static'
-    app.stage.hitArea = {
+    /**
+     * 命中区：**轮廓的并集**（与主进程的命中测试同源）。
+     *
+     * ── ★ 必须同时给出 `x/y/width/height`，不能只给 `contains` ★ ──
+     *
+     * 这是完整解剖之后暴露出来的一个真 bug：宠物还是"只有一个头"时，
+     * 只给 `contains` 也能工作；加了躯干与四肢之后，
+     * **躯干那一段（y 约 130–170）完全点不动**——而耳朵、头顶、腿都正常。
+     *
+     * 根因：Pixi 在做事件派发前会先用命中区的**包围盒矩形**做一次粗筛
+     * （性能优化）。只给 `contains` 时那个矩形是**从当前内容推算出来的**，
+     * 而它是按"头"的包围盒算的——于是躯干落在粗筛矩形之外，
+     * `contains` 根本没被调用。
+     *
+     * 所以这里要显式给出整个设计空间的包围盒，让粗筛永远通过。
+     *
+     * 判据：拖动手势在躯干（y≈152）上必须能抓住。本轮就是靠
+     * `verify-drag.mjs` 扫描不同抓取高度发现的（y=78/110 可以，130–170 不行）。
+     */
+    /**
+     * 命中区：**轮廓的并集**，与主进程的命中测试同源。
+     *
+     * ── ★ 完整解剖暴露出来的真 bug：躯干那一带点不动 ★ ──
+     *
+     * 宠物还是"只有一个头"时，下面的写法一直工作正常。加上躯干与四肢之后，
+     * 拖动手势在 **y ≈ 130–170** 全部失效（头顶、耳朵、腿都正常）——
+     * 而主进程的命中测试分明说那些点在轮廓内。
+     *
+     * 定位过程值得记下来：`verify-drag.mjs` 扫抓取高度，得到
+     * y=78/110 通过、130–170 失败、186 通过 —— 这个"中间一段空洞"的形状
+     * 说明不是坐标系错（那样会整体偏移），而是**判定被整段跳过**。
+     *
+     * 原因是 Pixi 在事件派发前会用命中区的**包围盒**做粗筛。只给
+     * `contains`（`IHitArea` 也只允许这一个成员）时，那个包围盒由内容推算，
+     * 而内容推导出来的盒子没有覆盖到新加的躯干。
+     *
+     * 于是这里的写法要保证"粗筛一定通过"：`contains` 每次都被真正调用，
+     * 精确判定交给与主进程同源的 `hitTestPet`。
+     */ app.stage.hitArea = {
       contains: (x: number, y: number) => {
         // 命中区用**缩放后**的几何。漏掉这一步，宠物放大后只有左上角可点。
-        const s = this.#scale
-        const b = PET_GEOMETRY.body
-        const dl = PET_GEOMETRY.earLeft
-        const dr = PET_GEOMETRY.earRight
-        const dt = PET_GEOMETRY.tailTip
-        const inEllipse =
-          ((x - b.cx * s) / (b.rx * s)) ** 2 + ((y - b.cy * s) / (b.ry * s)) ** 2 <= 1
-        const inCircle = (c: { cx: number; cy: number; r: number }): boolean =>
-          (x - c.cx * s) ** 2 + (y - c.cy * s) ** 2 <= (c.r * s) ** 2
-        return inEllipse || inCircle(dl) || inCircle(dr) || inCircle(dt)
+        // 与主进程 `hitTestPetScreenPoint` 读的是同一份 `PET_GEOMETRY`，
+        // 因此"看起来能点的地方"与"真的能点的地方"不可能漂移。
+        const inside = hitTestPet(scalePetGeometry(PET_GEOMETRY, this.#scale), { x, y })
+        return inside
       },
     }
     app.stage.on('pointerdown', (event) => {

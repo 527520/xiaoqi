@@ -17,8 +17,13 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-/** 宠物身体中心（设计空间），用来算"从哪里抓住它"。 */
-const BODY_CENTRE = { x: 110, y: 139 }
+/**
+ * 抓取点（设计空间）—— **躯干中心**。
+ *
+ * 别抓头：头与躯干是分开的两块，抓头拖动时"手的落点"与"身体重心"不一致，
+ * 位移断言会变得对形状极其敏感。躯干是完整解剖里最实的一块。
+ */
+const BODY_CENTRE = { x: 110, y: Number(process.env.XIAOQI_DRAG_GRAB_Y ?? '152') }
 
 /**
  * 设计空间的边长（像素）。
