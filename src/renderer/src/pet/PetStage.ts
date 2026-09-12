@@ -3,7 +3,7 @@ import { type Application, Container, FillGradient, Graphics } from 'pixi.js'
 import { PET_GEOMETRY } from '@shared/constants'
 import { hitTestPet, scalePetGeometry } from '@shared/geometry'
 import { PET_BODY, PET_FACE, PET_PALETTE, PET_STROKE_WIDTH } from '@shared/palette'
-import type { Emotion, RelationshipMood } from '@shared/types'
+import type { Emotion, RelationshipMood, VisibilityMode } from '@shared/types'
 
 import {
   BLINK_DURATION_SECONDS,
@@ -20,6 +20,7 @@ import {
   type MoodAnimation,
 } from './animation'
 import { faceFor } from './emotionFace'
+import type { PetStageLike } from './petStageContract'
 
 /**
  * 宠物渲染舞台 —— PixiJS 程序化几何角色。
@@ -73,7 +74,7 @@ const TAIL_SHAPE = {
   rotation: 0.74,
 } as const
 
-export class PetStage {
+export class PetStage implements PetStageLike {
   readonly #app: Application
   readonly #root = new Container()
   /** 会随呼吸形变的部分。 */
@@ -124,7 +125,7 @@ export class PetStage {
   #dragging = false
 
   /** 形态。由外部按主进程推送的状态设置。 */
-  mode: 'active' | 'silent' | 'hidden' = 'active'
+  mode: VisibilityMode = 'active'
 
   /** 情绪。由外部按主进程推送的推断结果设置。 */
   #emotion: Emotion = 'calm'
