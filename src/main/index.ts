@@ -502,7 +502,7 @@ function registerIpc(): void {
  * 与 `XIAOQI_RESIZE_TEST` / `XIAOQI_OPEN_LEDGER_MS` 同类：只给取证用。
  */
 function openMeshProbeIfRequested(): void {
-  if (process.env.XIAOQI_MESH_PROBE !== '1') return
+  if (!process.env.XIAOQI_MESH_PROBE) return
 
   log('（取证）打开渲染探针窗口')
   const window = createProbeWindow()
@@ -511,7 +511,10 @@ function openMeshProbeIfRequested(): void {
   if (entry.url) {
     void window.loadURL(entry.url)
   } else if (entry.file) {
-    void window.loadFile(entry.file)
+    // ⚠️ 查询参数走 loadFile 的 query 选项，不能拼进 file 路径——
+    //    拼进去会被百分号编码成文件名的一部分（mesh.html%3Fvariants），
+    //    结果是 ERR_FILE_NOT_FOUND 加一张白页。
+    void window.loadFile(entry.file, entry.query ? { query: entry.query } : undefined)
   }
 }
 

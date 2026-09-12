@@ -43,11 +43,34 @@ export function createProbeWindow(): BrowserWindow {
   return window
 }
 
-/** 探针页入口（与宠物/账本同一套 dev-server 约定）。 */
-export function resolveProbeEntry(): { url?: string; file?: string } {
+/**
+ * 探针页入口（与宠物/账本同一套 dev-server 约定）。
+ *
+ * ⚠️ 查询参数必须**分开返回**，不能拼进文件路径。
+ *    `XIAOQI_MESH_PROBE` 的值用来切换探针模式（`1` = 光照对照实验、
+ *    `variants` = Mesh 变换语义实验）。第一版把它拼成了
+ *    `mesh.html?variants` 交给 `loadFile`，于是 `?` 被百分号编码进文件名，
+ *    实际请求的是 `mesh.html%3Fvariants` —— Electron 报 `ERR_FILE_NOT_FOUND`，
+ *    页面全白，而脚本只看到"探针页没起来"。
+ *    `loadFile` 有专门的 `query` 选项，走它才对。
+ */
+export function resolveProbeEntry(): {
+  url?: string
+  file?: string
+  /** 传给 `loadFile` 的 `query`（Electron 要求是 `Record<string,string>`）。 */
+  query?: Record<string, string>
+} {
   const devServerUrl = process.env.ELECTRON_RENDERER_URL
+  const mode = process.env.XIAOQI_MESH_PROBE ?? '1'
+  const hasMode = mode !== '1'
+
   if (!app.isPackaged && devServerUrl) {
-    return { url: new URL('mesh.html', devServerUrl).toString() }
+    return { url: new URL(`mesh.html${hasMode ? `?${mode}` : ''}`, devServerUrl).toString() }
   }
-  return { file: join(__dirname, '../renderer/mesh.html') }
+  return {
+    file: join(__dirname, '../renderer/mesh.html'),
+    // 页面侧用 `URLSearchParams.has('variants')` 判断模式，
+    // 所以这里给一个空值即可（`?variants=`）。
+    ...(hasMode ? { query: { [mode]: '' } } : {}),
+  }
 }
