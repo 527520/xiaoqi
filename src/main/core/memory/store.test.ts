@@ -316,3 +316,218 @@ describe('escapeLike 本身（纯函数）', () => {
     expect(escapeLike('加班')).toBe('加班')
   })
 })
+
+describe('★ 幂等迁移：既有数据库必须能被安全升级', () => {
+  /**
+   * 造一个**旧版本**的库：只有最初的表结构，没有双时间字段。
+   *
+   * 这是迁移测试的关键——用当前 `SCHEMA_SQL` 建的库**已经有**那些列，
+   * 在它上面测迁移等于什么都没测（迁移会发现"列已存在"然后跳过）。
+   * 必须真的造一个旧库出来。
+   */
+  function makeLegacyDatabase(): DatabaseLike {
+    const legacy = new BetterSqlite3(':memory:')
+    legacy.exec(`
+      CREATE TABLE memories (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind         TEXT    NOT NULL,
+        occurred_at  INTEGER NOT NULL,
+        content      TEXT    NOT NULL,
+        tags         TEXT    NOT NULL DEFAULT '',
+        weight       REAL    NOT NULL DEFAULT 1.0,
+        emotion      TEXT,
+        intensity    REAL,
+        derived_from INTEGER,
+        created_at   INTEGER NOT NULL
+      );
+      CREATE TABLE working (
+        key        TEXT PRIMARY KEY,
+        value      TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `)
+    return legacy
+  }
+
+  it('★ 旧库能被打开，且数据不丢', () => {
+    const legacy = makeLegacyDatabase()
+    legacy
+      .prepare(
+        `INSERT INTO memories (kind, occurred_at, content, tags, weight, created_at)
+         VALUES ('episodic', ?, '旧版本写入的一条记忆', 'old', 1, ?)`,
+      )
+      .run(NOW, NOW)
+
+    // 用当前版本打开（会跑迁移）
+    const upgraded = new MemoryStore(legacy, { now: () => NOW })
+
+    const all = upgraded.search({ limit: 100 })
+    expect(all).toHaveLength(1)
+    expect(all[0]?.content).toBe('旧版本写入的一条记忆')
+    expect(all[0]?.tags).toEqual(['old'])
+  })
+
+  it('★ 迁移补上的双时间列必须**真的可读**（不只是出现在 PRAGMA 里）', () => {
+    // 这条最初只断言 PRAGMA 里有那两列，于是关掉迁移也照样通过——
+    // 因为没有任何代码读它们。现在改成**通过领域对象读**：
+    // 迁移没跑的话，`rowToRecord` 拿不到列，这里就会失败。
+    const legacy = makeLegacyDatabase()
+    legacy
+      .prepare(
+        `INSERT INTO memories (kind, occurred_at, content, tags, weight, created_at)
+         VALUES ('semantic', ?, '用户不喝咖啡', 'drink', 1, ?)`,
+      )
+      .run(NOW, NOW)
+    const upgraded = new MemoryStore(legacy, { now: () => NOW })
+    const record = upgraded.search({ limit: 10 })[0]
+    // 迁移后未取代 → 这两个可选字段**不该出现**（而不是出现成 undefined）
+    expect(record).toBeDefined()
+    expect(record?.supersededBy).toBeUndefined()
+    expect(record?.supersededAt).toBeUndefined()
+
+    // 而 PRAGMA 里确实有这两列（独立核对一次"列真的被加上了"）
+    const columns = (legacy.prepare('PRAGMA table_info(memories)').all() as { name: string }[]).map(
+      (row) => row.name,
+    )
+    expect(columns).toContain('superseded_by')
+    expect(columns).toContain('superseded_at')
+  })
+
+  it('★ 迁移是幂等的：连开三次不报错、数据不变', () => {
+    const legacy = makeLegacyDatabase()
+    legacy
+      .prepare(
+        `INSERT INTO memories (kind, occurred_at, content, tags, weight, created_at)
+         VALUES ('episodic', ?, '反复打开也不该消失', 'x', 1, ?)`,
+      )
+      .run(NOW, NOW)
+
+    const first = new MemoryStore(legacy, { now: () => NOW })
+    const second = new MemoryStore(legacy, { now: () => NOW })
+    const third = new MemoryStore(legacy, { now: () => NOW })
+
+    for (const s of [first, second, third]) {
+      expect(s.search({ limit: 100 })).toHaveLength(1)
+    }
+  })
+
+  it('★ 迁移不碰已有列：旧数据在新代码下仍能被检索到', () => {
+    const legacy = makeLegacyDatabase()
+    legacy
+      .prepare(
+        `INSERT INTO memories (kind, occurred_at, content, tags, weight, created_at)
+         VALUES ('semantic', ?, '用户不喝咖啡', 'drink', 1, ?)`,
+      )
+      .run(NOW, NOW)
+    const upgraded = new MemoryStore(legacy, { now: () => NOW })
+
+    expect(upgraded.search({ query: '咖啡' })).toHaveLength(1)
+    expect(upgraded.search({ kinds: ['semantic'] })).toHaveLength(1)
+  })
+})
+
+describe('★ 双时间字段：被取代 ≠ 软删除', () => {
+  function addFact(content: string, tags: string[] = ['drink']): number {
+    return store.addSemantic({ content, tags })
+  }
+
+  it('supersede 记下"被哪一条取代"与时刻', () => {
+    const oldId = addFact('用户喝咖啡')
+    const newId = addFact('用户不喝咖啡')
+    expect(store.supersede(oldId, newId)).toBe(true)
+
+    const old = store.get(oldId)
+    expect(old?.supersededBy).toBe(newId)
+    expect(old?.supersededAt).toBe(NOW)
+  })
+
+  it('★ 被取代的旧事实**仍在库里**（它回答了"当时是这么认为的"）', () => {
+    const oldId = addFact('用户喝咖啡')
+    const newId = addFact('用户不喝咖啡')
+    store.supersede(oldId, newId)
+
+    const old = store.get(oldId)
+    expect(old).not.toBeNull()
+    expect(old?.content).toBe('用户喝咖啡')
+  })
+
+  it('supersede 指向不存在的 id 时返回 false（不静默成功）', () => {
+    expect(store.supersede(999_999, 1)).toBe(false)
+  })
+
+  it('★ 用户"忘掉"仍然是**物理删除**，且会带走取代链条', () => {
+    // 这条是 §1.2⑪ 与"双时间"之间最容易混淆的边界：
+    // 被取代是"留着当历史"，用户删除是"真的消失"。
+    const oldId = addFact('用户喝咖啡')
+    const newId = addFact('用户不喝咖啡')
+    store.supersede(oldId, newId)
+
+    // 删掉取代者（新条）：被它取代的旧条也不该继续留着，
+    // 否则库里会剩一条"被一个已经不存在的 id 取代"的悬空记录。
+    expect(store.deleteMemory(newId)).toBe(true)
+
+    expect(store.get(newId)).toBeNull()
+    expect(store.get(oldId)).toBeNull()
+  })
+
+  it('★ 删除后连"被取代"的痕迹也查不到（不留痕）', () => {
+    const oldId = addFact('用户喝咖啡')
+    const newId = addFact('用户不喝咖啡')
+    store.supersede(oldId, newId)
+    store.deleteMemory(newId)
+
+    const rows = db.prepare('SELECT COUNT(*) AS n FROM memories').get() as { n: number }
+    expect(rows.n).toBe(0)
+  })
+})
+
+describe('核心记忆块', () => {
+  it('写入后能读回', () => {
+    store.setBlock('persona', '我是小奇')
+    const block = store.getBlock('persona')
+    expect(block?.content).toBe('我是小奇')
+    expect(block?.kind).toBe('persona')
+    expect(block?.updatedAt).toBe(NOW)
+  })
+
+  it('不存在的块返回 null（不是空串）', () => {
+    expect(store.getBlock('human')).toBeNull()
+  })
+
+  it('★ 同一块重复写入是覆盖，不是新增（否则会攒出一堆）', () => {
+    store.setBlock('human', '用户不喝咖啡')
+    store.setBlock('human', '用户不喝咖啡，也不喝茶')
+    expect(store.listBlocks()).toHaveLength(1)
+    expect(store.getBlock('human')?.content).toBe('用户不喝咖啡，也不喝茶')
+  })
+
+  it('listBlocks 按种类稳定排序', () => {
+    store.setBlock('now', '此刻')
+    store.setBlock('persona', '自己')
+    store.setBlock('human', '用户')
+    expect(store.listBlocks().map((b) => b.kind)).toEqual(['human', 'now', 'persona'])
+  })
+
+  it('删块后读回 null', () => {
+    store.setBlock('now', '此刻')
+    expect(store.deleteBlock('now')).toBe(true)
+    expect(store.getBlock('now')).toBeNull()
+  })
+
+  it('删不存在的块返回 false', () => {
+    expect(store.deleteBlock('persona')).toBe(false)
+  })
+
+  it('★ 块与 memories 是两张独立的表（块不参与记忆检索）', () => {
+    store.setBlock('human', '用户不喝咖啡')
+    expect(store.search({ limit: 100 })).toHaveLength(0)
+    expect(store.search({ query: '咖啡' })).toHaveLength(0)
+  })
+
+  it('★ 清空记忆不带走核心块（用户清的是"记得的事"，不是"它是谁"）', () => {
+    store.setBlock('persona', '我是小奇')
+    store.addSemantic({ content: '用户不喝咖啡', tags: ['drink'] })
+    expect(store.deleteAll()).toBe(1)
+    expect(store.getBlock('persona')?.content).toBe('我是小奇')
+  })
+})

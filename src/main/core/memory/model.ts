@@ -46,6 +46,16 @@ export interface MemoryRecord {
   readonly intensity?: number
   /** 仅语义记忆有：来源情景记忆的 id（可空 = 用户手动添加）。 */
   readonly derivedFrom?: number
+  /**
+   * 被哪一条取代（双时间字段，借鉴 Zep/Graphiti）。
+   *
+   * ⚠️ **不是软删除**：软删除是"用户点了删除但数据还在"（与 §1.2⑪ 冲突）；
+   *    这里是"新事实推翻了旧事实，旧事实仍是历史"。用户点"忘掉"走的是
+   *    物理删除，并会连带清掉取代链条。
+   */
+  readonly supersededBy?: number
+  /** 被取代的时刻。 */
+  readonly supersededAt?: number
 }
 
 /** 新的情景记忆（插入前的形态，id 由数据库给）。 */
